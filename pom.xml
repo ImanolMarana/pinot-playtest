@@ -105,6 +105,8 @@
   <inceptionYear>2018</inceptionYear>
 
   <properties>
+    <sonar.organization>imanolmarana</sonar.organization>
+    <sonar.host.url>https://sonarcloud.io</sonar.host.url>
     <pinot.root>${basedir}</pinot.root>
     <build.profile.id>dev</build.profile.id>
     <jdk.version>11</jdk.version>
