@@ -48,6 +48,50 @@ public class TwoKeysGroupIdGenerator implements GroupIdGenerator {
     Object secondKey = keyValues[1];
     int numGroups = _groupIdMap.size();
     if (numGroups < _numGroupsLimit) {
+      return getGroupIdBelowLimit(firstKey, secondKey, numGroups);
+    } else {
+      return getGroupIdAboveLimit(firstKey, secondKey);
+    }
+  }
+  
+  private int getGroupIdBelowLimit(Object firstKey, Object secondKey, int numGroups) {
+    int firstKeyId = firstKey != null ? _firstKeyToIdMap.put(firstKey) : NULL_ID;
+    int secondKeyId = secondKey != null ? _secondKeyToIdMap.put(secondKey) : NULL_ID;
+    long longKey = ((long) firstKeyId << 32) | (secondKeyId & 0xFFFFFFFFL);
+    return _groupIdMap.computeIfAbsent(longKey, k -> numGroups);
+  }
+  
+  private int getGroupIdAboveLimit(Object firstKey, Object secondKey) {
+    int firstKeyId = getKeyId(firstKey, _firstKeyToIdMap);
+    if (firstKeyId == INVALID_ID) {
+      return INVALID_ID;
+    }
+    int secondKeyId = getKeyId(secondKey, _secondKeyToIdMap);
+    if (secondKeyId == INVALID_ID) {
+      return INVALID_ID;
+    }
+    long longKey = ((long) firstKeyId << 32) | (secondKeyId & 0xFFFFFFFFL);
+    return _groupIdMap.get(longKey);
+  }
+  
+  private int getKeyId(Object key, ValueToIdMap keyToIdMap) {
+    if (key != null) {
+      int keyId = keyToIdMap.getId(key);
+      if (keyId == INVALID_ID) {
+        return INVALID_ID;
+      }
+      return keyId;
+    } else {
+      return NULL_ID;
+    }
+  }
+
+//Refactoring end
+    Object[] keyValues = (Object[]) key;
+    Object firstKey = keyValues[0];
+    Object secondKey = keyValues[1];
+    int numGroups = _groupIdMap.size();
+    if (numGroups < _numGroupsLimit) {
       int firstKeyId = firstKey != null ? _firstKeyToIdMap.put(firstKey) : NULL_ID;
       int secondKeyId = secondKey != null ? _secondKeyToIdMap.put(secondKey) : NULL_ID;
       long longKey = ((long) firstKeyId << 32) | (secondKeyId & 0xFFFFFFFFL);

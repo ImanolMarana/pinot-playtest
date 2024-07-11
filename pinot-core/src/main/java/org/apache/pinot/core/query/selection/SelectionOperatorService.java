@@ -85,28 +85,43 @@ public class SelectionOperatorService {
     for (DataTable dataTable : dataTables) {
       int numRows = dataTable.getNumberOfRows();
       if (_queryContext.isNullHandlingEnabled()) {
-        RoaringBitmap[] nullBitmaps = new RoaringBitmap[dataTable.getDataSchema().size()];
-        for (int colId = 0; colId < nullBitmaps.length; colId++) {
-          nullBitmaps[colId] = dataTable.getNullRowIds(colId);
-        }
-        for (int rowId = 0; rowId < numRows; rowId++) {
-          Object[] row = SelectionOperatorUtils.extractRowFromDataTable(dataTable, rowId);
-          for (int colId = 0; colId < nullBitmaps.length; colId++) {
-            if (nullBitmaps[colId] != null && nullBitmaps[colId].contains(rowId)) {
-              row[colId] = null;
-            }
-          }
-          SelectionOperatorUtils.addToPriorityQueue(row, _rows, _numRowsToKeep);
-          Tracing.ThreadAccountantOps.sampleAndCheckInterruptionPeriodically(rowId);
-        }
+        processDataTableWithNullHandling(dataTable, numRows);
       } else {
-        for (int rowId = 0; rowId < numRows; rowId++) {
-          Object[] row = SelectionOperatorUtils.extractRowFromDataTable(dataTable, rowId);
-          SelectionOperatorUtils.addToPriorityQueue(row, _rows, _numRowsToKeep);
-          Tracing.ThreadAccountantOps.sampleAndCheckInterruptionPeriodically(rowId);
-        }
+        processDataTableWithoutNullHandling(dataTable, numRows);
       }
     }
+  }
+
+  private void processDataTableWithNullHandling(DataTable dataTable, int numRows) {
+    RoaringBitmap[] nullBitmaps = new RoaringBitmap[dataTable.getDataSchema().size()];
+    for (int colId = 0; colId < nullBitmaps.length; colId++) {
+      nullBitmaps[colId] = dataTable.getNullRowIds(colId);
+    }
+    for (int rowId = 0; rowId < numRows; rowId++) {
+      Object[] row = SelectionOperatorUtils.extractRowFromDataTable(dataTable, rowId);
+      handleNullValues(row, nullBitmaps, rowId);
+      SelectionOperatorUtils.addToPriorityQueue(row, _rows, _numRowsToKeep);
+      Tracing.ThreadAccountantOps.sampleAndCheckInterruptionPeriodically(rowId);
+    }
+  }
+
+  private void processDataTableWithoutNullHandling(DataTable dataTable, int numRows) {
+    for (int rowId = 0; rowId < numRows; rowId++) {
+      Object[] row = SelectionOperatorUtils.extractRowFromDataTable(dataTable, rowId);
+      SelectionOperatorUtils.addToPriorityQueue(row, _rows, _numRowsToKeep);
+      Tracing.ThreadAccountantOps.sampleAndCheckInterruptionPeriodically(rowId);
+    }
+  }
+
+  private void handleNullValues(Object[] row, RoaringBitmap[] nullBitmaps, int rowId) {
+    for (int colId = 0; colId < nullBitmaps.length; colId++) {
+      if (nullBitmaps[colId] != null && nullBitmaps[colId].contains(rowId)) {
+        row[colId] = null;
+      }
+    }
+  }
+
+//Refactoring end
   }
 
   /**

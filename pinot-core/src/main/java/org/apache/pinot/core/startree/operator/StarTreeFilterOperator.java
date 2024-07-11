@@ -228,7 +228,6 @@ public class StarTreeFilterOperator extends BaseFilterOperator {
     // node won't split further on other predicate columns.
     boolean foundLeafNode = starTreeRootNode.isLeaf();
 
-    // Use BFS to traverse the star tree
     Queue<StarTreeNode> queue = new ArrayDeque<>();
     queue.add(starTreeRootNode);
     int currentDimensionId = -1;
@@ -237,136 +236,181 @@ public class StarTreeFilterOperator extends BaseFilterOperator {
     if (foundLeafNode) {
       globalRemainingPredicateColumns = new HashSet<>(remainingPredicateColumns);
     }
-    IntSet matchingDictIds = null;
-    StarTreeNode starTreeNode;
-    while ((starTreeNode = queue.poll()) != null) {
-      int dimensionId = starTreeNode.getDimensionId();
-      if (dimensionId > currentDimensionId) {
-        // Previous level finished
-        String dimension = dimensionNames.get(dimensionId);
-        remainingPredicateColumns.remove(dimension);
-        remainingGroupByColumns.remove(dimension);
-        if (foundLeafNode && globalRemainingPredicateColumns == null) {
-          globalRemainingPredicateColumns = new HashSet<>(remainingPredicateColumns);
-        }
-        matchingDictIds = null;
-        currentDimensionId = dimensionId;
-      }
 
-      // If all predicate columns and group-by columns are matched, we can use aggregated document
-      if (remainingPredicateColumns.isEmpty() && remainingGroupByColumns.isEmpty()) {
-        matchingDocIds.add(starTreeNode.getAggregatedDocId());
-        continue;
-      }
+    while (!queue.isEmpty()) {
+      StarTreeNode starTreeNode = queue.poll();
+      processStarTreeNode(starTreeNode, dimensionNames, matchingDocIds, remainingPredicateColumns,
+          remainingGroupByColumns, queue, currentDimensionId, globalRemainingPredicateColumns, foundLeafNode);
 
-      // For leaf node, because we haven't exhausted all predicate columns and group-by columns, we cannot use
-      // the aggregated document. Add the range of documents for this node to the bitmap, and keep track of the
-      // remaining predicate columns for this node
-      if (starTreeNode.isLeaf()) {
-        matchingDocIds.add((long) starTreeNode.getStartDocId(), starTreeNode.getEndDocId());
-        continue;
-      }
-
-      // For non-leaf node, proceed to next level
-      String childDimension = dimensionNames.get(dimensionId + 1);
-
-      // Only read star-node when the dimension is not in the global remaining predicate columns or group-by columns
-      // because we cannot use star-node in such cases
-      StarTreeNode starNode = null;
-      if ((globalRemainingPredicateColumns == null || !globalRemainingPredicateColumns.contains(childDimension))
-          && !remainingGroupByColumns.contains(childDimension)) {
-        starNode = starTreeNode.getChildForDimensionValue(StarTreeNode.ALL);
-      }
-
-      if (remainingPredicateColumns.contains(childDimension)) {
-        // Have predicates on the next level, add matching nodes to the queue
-
-        // Calculate the matching dictionary ids for the child dimension
-        if (matchingDictIds == null) {
-          matchingDictIds = getMatchingDictIds(_predicateEvaluatorsMap.get(childDimension));
-
-          // If no matching dictionary id found, directly return null
-          if (matchingDictIds.isEmpty()) {
-            return null;
-          }
-        }
-
-        int numMatchingDictIds = matchingDictIds.size();
-        int numChildren = starTreeNode.getNumChildren();
-
-        // If number of matching dictionary ids is large, use scan instead of binary search
-        if (numMatchingDictIds * USE_SCAN_TO_TRAVERSE_NODES_THRESHOLD > numChildren || _scanStarTreeNodes) {
-          Iterator<? extends StarTreeNode> childrenIterator = starTreeNode.getChildrenIterator();
-
-          // When the star-node exists, and the number of matching dictionary ids is more than or equal to the
-          // number of non-star child nodes, check if all the child nodes match the predicate, and use the
-          // star-node if so
-          if (starNode != null && numMatchingDictIds >= numChildren - 1) {
-            List<StarTreeNode> matchingChildNodes = new ArrayList<>();
-            boolean findLeafChildNode = false;
-            while (childrenIterator.hasNext()) {
-              StarTreeNode childNode = childrenIterator.next();
-              if (matchingDictIds.contains(childNode.getDimensionValue())) {
-                matchingChildNodes.add(childNode);
-                findLeafChildNode |= childNode.isLeaf();
-              }
-            }
-            if (matchingChildNodes.size() == numChildren - 1) {
-              // All the child nodes (except for the star-node) match the predicate, use the star-node
-              queue.add(starNode);
-              foundLeafNode |= starNode.isLeaf();
-            } else {
-              // Some child nodes do not match the predicate, use the matching child nodes
-              queue.addAll(matchingChildNodes);
-              foundLeafNode |= findLeafChildNode;
-            }
-          } else {
-            // Cannot use the star-node, use the matching child nodes
-            while (childrenIterator.hasNext()) {
-              StarTreeNode childNode = childrenIterator.next();
-              if (matchingDictIds.contains(childNode.getDimensionValue())) {
-                queue.add(childNode);
-                foundLeafNode |= childNode.isLeaf();
-              }
-            }
-          }
-        } else {
-          IntIterator iterator = matchingDictIds.iterator();
-          while (iterator.hasNext()) {
-            int matchingDictId = iterator.nextInt();
-            StarTreeNode childNode = starTreeNode.getChildForDimensionValue(matchingDictId);
-
-            // Child node might be null because the matching dictionary id might not exist under this branch
-            if (childNode != null) {
-              queue.add(childNode);
-              foundLeafNode |= childNode.isLeaf();
-            }
-          }
-        }
-      } else {
-        // No predicate on the next level
-
-        if (starNode != null) {
-          // Star-node exists, use it
-          queue.add(starNode);
-          foundLeafNode |= starNode.isLeaf();
-        } else {
-          // Star-node does not exist or cannot be used, add all non-star nodes to the queue
-          Iterator<? extends StarTreeNode> childrenIterator = starTreeNode.getChildrenIterator();
-          while (childrenIterator.hasNext()) {
-            StarTreeNode childNode = childrenIterator.next();
-            if (childNode.getDimensionValue() != StarTreeNode.ALL) {
-              queue.add(childNode);
-              foundLeafNode |= childNode.isLeaf();
-            }
-          }
-        }
-      }
+      // Update currentDimensionId and foundLeafNode after processing the node
+      currentDimensionId = starTreeNode.getDimensionId();
+      foundLeafNode |= starTreeNode.isLeaf();
     }
 
     return new StarTreeResult(matchingDocIds,
         globalRemainingPredicateColumns != null ? globalRemainingPredicateColumns : Collections.emptySet());
   }
+
+  private void processStarTreeNode(StarTreeNode starTreeNode, List<String> dimensionNames,
+      MutableRoaringBitmap matchingDocIds, Set<String> remainingPredicateColumns,
+      Set<String> remainingGroupByColumns, Queue<StarTreeNode> queue, int currentDimensionId,
+      Set<String> globalRemainingPredicateColumns, boolean foundLeafNode) {
+    int dimensionId = starTreeNode.getDimensionId();
+
+    if (dimensionId > currentDimensionId) {
+      updateDimension(dimensionId, dimensionNames, remainingPredicateColumns, remainingGroupByColumns,
+          globalRemainingPredicateColumns, foundLeafNode);
+    }
+
+    // If all predicate columns and group-by columns are matched, we can use aggregated document
+    if (remainingPredicateColumns.isEmpty() && remainingGroupByColumns.isEmpty()) {
+      matchingDocIds.add(starTreeNode.getAggregatedDocId());
+      return;
+    }
+
+    // For leaf node, because we haven't exhausted all predicate columns and group-by columns, we cannot use
+    // the aggregated document. Add the range of documents for this node to the bitmap
+    if (starTreeNode.isLeaf()) {
+      matchingDocIds.add((long) starTreeNode.getStartDocId(), starTreeNode.getEndDocId());
+      return;
+    }
+
+    // For non-leaf node, proceed to next level
+    String childDimension = dimensionNames.get(dimensionId + 1);
+    processChildNodes(starTreeNode, childDimension, remainingPredicateColumns, remainingGroupByColumns,
+        globalRemainingPredicateColumns, queue);
+  }
+
+  private void updateDimension(int dimensionId, List<String> dimensionNames,
+      Set<String> remainingPredicateColumns, Set<String> remainingGroupByColumns,
+      Set<String> globalRemainingPredicateColumns, boolean foundLeafNode) {
+    String dimension = dimensionNames.get(dimensionId);
+    remainingPredicateColumns.remove(dimension);
+    remainingGroupByColumns.remove(dimension);
+    if (foundLeafNode && globalRemainingPredicateColumns == null) {
+      globalRemainingPredicateColumns = new HashSet<>(remainingPredicateColumns);
+    }
+  }
+
+  private void processChildNodes(StarTreeNode starTreeNode, String childDimension,
+      Set<String> remainingPredicateColumns, Set<String> remainingGroupByColumns,
+      Set<String> globalRemainingPredicateColumns, Queue<StarTreeNode> queue) {
+    // Only read star-node when the dimension is not in the global remaining predicate columns or group-by columns
+    // because we cannot use star-node in such cases
+    StarTreeNode starNode = getStarNode(starTreeNode, childDimension, globalRemainingPredicateColumns,
+        remainingGroupByColumns);
+
+    if (remainingPredicateColumns.contains(childDimension)) {
+      // Have predicates on the next level, add matching nodes to the queue
+      processMatchingChildNodes(starTreeNode, childDimension, starNode, queue);
+    } else if (starNode != null) {
+      // Star-node exists and can be used, add it to the queue
+      queue.add(starNode);
+    } else {
+      // Star-node does not exist or cannot be used, add all non-star nodes to the queue
+      addAllNonStarChildNodes(starTreeNode, queue);
+    }
+  }
+
+  private StarTreeNode getStarNode(StarTreeNode starTreeNode, String childDimension,
+      Set<String> globalRemainingPredicateColumns, Set<String> remainingGroupByColumns) {
+    if ((globalRemainingPredicateColumns == null || !globalRemainingPredicateColumns.contains(childDimension))
+        && !remainingGroupByColumns.contains(childDimension)) {
+      return starTreeNode.getChildForDimensionValue(StarTreeNode.ALL);
+    }
+    return null;
+  }
+
+  private void processMatchingChildNodes(StarTreeNode starTreeNode, String childDimension,
+      StarTreeNode starNode, Queue<StarTreeNode> queue) {
+    IntSet matchingDictIds = getMatchingDictIds(_predicateEvaluatorsMap.get(childDimension));
+
+    // If no matching dictionary id found, the result for the filter operator will be empty, early terminate
+    if (matchingDictIds.isEmpty()) {
+      _resultEmpty = true;
+      return;
+    }
+
+    int numMatchingDictIds = matchingDictIds.size();
+    int numChildren = starTreeNode.getNumChildren();
+
+    // If number of matching dictionary ids is large, use scan instead of binary search
+    if (numMatchingDictIds * USE_SCAN_TO_TRAVERSE_NODES_THRESHOLD > numChildren || _scanStarTreeNodes) {
+      addMatchingChildNodesUsingScan(starTreeNode, starNode, matchingDictIds, queue);
+    } else {
+      addMatchingChildNodesUsingBinarySearch(starTreeNode, matchingDictIds, queue);
+    }
+  }
+
+  private void addMatchingChildNodesUsingScan(StarTreeNode starTreeNode, StarTreeNode starNode,
+      IntSet matchingDictIds, Queue<StarTreeNode> queue) {
+    Iterator<? extends StarTreeNode> childrenIterator = starTreeNode.getChildrenIterator();
+
+    // When the star-node exists, and the number of matching dictionary ids is more than or equal to the
+    // number of non-star child nodes, check if all the child nodes match the predicate, and use the
+    // star-node if so
+    if (starNode != null && matchingDictIds.size() >= starTreeNode.getNumChildren() - 1) {
+      addMatchingChildNodesWithStarNode(starTreeNode, starNode, matchingDictIds, queue);
+    } else {
+      // Cannot use the star-node, use the matching child nodes
+      addMatchingChildNodesWithoutStarNode(matchingDictIds, childrenIterator, queue);
+    }
+  }
+
+  private void addMatchingChildNodesWithStarNode(StarTreeNode starTreeNode, StarTreeNode starNode,
+      IntSet matchingDictIds, Queue<StarTreeNode> queue) {
+    List<StarTreeNode> matchingChildNodes = new ArrayList<>();
+    Iterator<? extends StarTreeNode> childrenIterator = starTreeNode.getChildrenIterator();
+    while (childrenIterator.hasNext()) {
+      StarTreeNode childNode = childrenIterator.next();
+      if (matchingDictIds.contains(childNode.getDimensionValue())) {
+        matchingChildNodes.add(childNode);
+      }
+    }
+    if (matchingChildNodes.size() == starTreeNode.getNumChildren() - 1) {
+      // All the child nodes (except for the star-node) match the predicate, use the star-node
+      queue.add(starNode);
+    } else {
+      // Some child nodes do not match the predicate, use the matching child nodes
+      queue.addAll(matchingChildNodes);
+    }
+  }
+
+  private void addMatchingChildNodesWithoutStarNode(IntSet matchingDictIds,
+      Iterator<? extends StarTreeNode> childrenIterator, Queue<StarTreeNode> queue) {
+    while (childrenIterator.hasNext()) {
+      StarTreeNode childNode = childrenIterator.next();
+      if (matchingDictIds.contains(childNode.getDimensionValue())) {
+        queue.add(childNode);
+      }
+    }
+  }
+
+  private void addMatchingChildNodesUsingBinarySearch(StarTreeNode starTreeNode, IntSet matchingDictIds,
+      Queue<StarTreeNode> queue) {
+    IntIterator iterator = matchingDictIds.iterator();
+    while (iterator.hasNext()) {
+      int matchingDictId = iterator.nextInt();
+      StarTreeNode childNode = starTreeNode.getChildForDimensionValue(matchingDictId);
+
+      // Child node might be null because the matching dictionary id might not exist under this branch
+      if (childNode != null) {
+        queue.add(childNode);
+      }
+    }
+  }
+
+  private void addAllNonStarChildNodes(StarTreeNode starTreeNode, Queue<StarTreeNode> queue) {
+    Iterator<? extends StarTreeNode> childrenIterator = starTreeNode.getChildrenIterator();
+    while (childrenIterator.hasNext()) {
+      StarTreeNode childNode = childrenIterator.next();
+      if (childNode.getDimensionValue() != StarTreeNode.ALL) {
+        queue.add(childNode);
+      }
+    }
+  }
+
+//Refactoring end
 
   /**
    * Helper method to get a set of matching dictionary ids from a list of composite predicate evaluators conjoined with

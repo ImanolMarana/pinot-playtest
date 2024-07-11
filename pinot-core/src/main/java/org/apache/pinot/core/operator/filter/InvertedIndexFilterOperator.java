@@ -62,12 +62,44 @@ public class InvertedIndexFilterOperator extends BaseColumnFilterOperator {
       return EmptyDocIdSet.getInstance();
     }
     if (numDictIds == 1) {
-      ImmutableRoaringBitmap docIds = _invertedIndexReader.getDocIds(dictIds[0]);
-      if (_exclusive) {
-        if (docIds instanceof MutableRoaringBitmap) {
-          MutableRoaringBitmap mutableRoaringBitmap = (MutableRoaringBitmap) docIds;
-          mutableRoaringBitmap.flip(0L, _numDocs);
-          return new BitmapDocIdSet(mutableRoaringBitmap, _numDocs);
+      return handleSingleDictId(dictIds[0]);
+    } else {
+      return handleMultipleDictIds(dictIds);
+    }
+  }
+
+  private BlockDocIdSet handleSingleDictId(int dictId) {
+    ImmutableRoaringBitmap docIds = _invertedIndexReader.getDocIds(dictId);
+    if (_exclusive) {
+      if (docIds instanceof MutableRoaringBitmap) {
+        ((MutableRoaringBitmap) docIds).flip(0L, _numDocs);
+        return new BitmapDocIdSet(docIds, _numDocs);
+      } else {
+        return new BitmapDocIdSet(ImmutableRoaringBitmap.flip(docIds, 0L, _numDocs), _numDocs);
+      }
+    } else {
+      return new BitmapDocIdSet(docIds, _numDocs);
+    }
+  }
+
+  private BlockDocIdSet handleMultipleDictIds(int[] dictIds) {
+    ImmutableRoaringBitmap[] bitmaps = new ImmutableRoaringBitmap[dictIds.length];
+    for (int i = 0; i < dictIds.length; i++) {
+      bitmaps[i] = _invertedIndexReader.getDocIds(dictIds[i]);
+    }
+    MutableRoaringBitmap docIds = ImmutableRoaringBitmap.or(bitmaps);
+    if (_exclusive) {
+      docIds.flip(0L, _numDocs);
+    }
+    InvocationRecording recording = Tracing.activeRecording();
+    if (recording.isEnabled()) {
+      recording.setColumnName(_predicateEvaluator.getPredicate().getLhs().getIdentifier());
+      recording.setNumDocsMatchingAfterFilter(docIds.getCardinality());
+      recording.setFilter(FilterType.INDEX, String.valueOf(_predicateEvaluator.getPredicateType()));
+    }
+    return new BitmapDocIdSet(docIds, _numDocs);
+  }
+  //Refactoring end
         } else {
           return new BitmapDocIdSet(ImmutableRoaringBitmap.flip(docIds, 0L, _numDocs), _numDocs);
         }

@@ -130,7 +130,7 @@ public class MessageCodeGen {
 
   // Generates the code to decode a message type and adds it to the msgDecodeCode map
   void generateDecodeCodeForAMessage(Map<String, MessageDecoderMethod> msgDecodeCode,
-      Queue<Descriptors.Descriptor> queue, Set<String> fieldsToRead) {
+                                      Queue<Descriptors.Descriptor> queue, Set<String> fieldsToRead) {
     Descriptors.Descriptor descriptor = queue.remove();
     String fullyQualifiedMsgName = ProtoBufUtils.getFullJavaName(descriptor);
     int varNum = 1;
@@ -146,9 +146,21 @@ public class MessageCodeGen {
         String.format("public static Map<String, Object> %s(%s msg) {", methodNameOfDecoder,
             fullyQualifiedMsgName), indent));
     code.append(completeLine("Map<String, Object> msgMap = new HashMap<>()", ++indent));
+    List<Descriptors.FieldDescriptor> descriptorsToDerive = getFieldsToDerive(descriptor, fieldsToRead);
+
+    for (Descriptors.FieldDescriptor desc : descriptorsToDerive) {
+      generateFieldExtractionCode(msgDecodeCode, queue, desc, indent, varNum, code);
+    }
+    code.append(completeLine("return msgMap", indent));
+    code.append(addIndent("}", --indent));
+    msgDecodeCode.put(fullyQualifiedMsgName, new MessageDecoderMethod(methodNameOfDecoder, code.toString()));
+  }
+
+  private List<Descriptors.FieldDescriptor> getFieldsToDerive(Descriptors.Descriptor descriptor,
+      Set<String> fieldsToRead) {
     List<Descriptors.FieldDescriptor> descriptorsToDerive = new ArrayList<>();
     if (fieldsToRead != null && !fieldsToRead.isEmpty()) {
-      for (String fieldName: fieldsToRead.stream().sorted().collect(Collectors.toList())) {
+      for (String fieldName : fieldsToRead.stream().sorted().collect(Collectors.toList())) {
         if (null == descriptor.findFieldByName(fieldName)) {
           LOGGER.debug("Field " + fieldName + " not found in the descriptor");
         } else {
@@ -158,172 +170,181 @@ public class MessageCodeGen {
     } else {
       descriptorsToDerive = descriptor.getFields();
     }
-
-    for (Descriptors.FieldDescriptor desc : descriptorsToDerive) {
-      Descriptors.FieldDescriptor.Type type = desc.getType();
-      String fieldNameInCode = ProtobufInternalUtils.underScoreToCamelCase(desc.getName(), true);
-      switch (type) {
-        case STRING:
-        case INT32:
-        case INT64:
-        case UINT64:
-        case FIXED64:
-        case FIXED32:
-        case UINT32:
-        case SFIXED32:
-        case SFIXED64:
-        case SINT32:
-        case SINT64:
-        case DOUBLE:
-        case FLOAT:
-          /* Generate code for scalar field extraction
-           Example: If field has presence
-            if (msg.hasEmail()) {
-              msgMap.put("email", msg.getEmail());
-            }
-           OR if no presence:
-            msgMap.put("email", msg.getEmail());
-           OR if repeated:
-            if (msg.getEmailCount() > 0) {
-             msgMap.put("email", msg.getEmailList().toArray());
-            }
-          */
-          code.append(codeForScalarFieldExtraction(desc, fieldNameInCode, indent));
-          break;
-        case BOOL:
-          /* Generate code for boolean field extraction
-           Example: If field has presence
-             if (msg.hasIsRegistered()) {
-               msgMap.put("is_registered", String.valueOf(msg.getIsRegistered()));
-             }
-           OR if no presence:
-             msgMap.put("is_registered", String.valueOf(msg.getIsRegistered()));
-           OR if repeated:
-             List<Object> list1 = new ArrayList<>();
-             for (String row: msg.getIsRegisteredList()) {
-               list3.add(String.valueOf(row));
-             }
-             if (!list1.isEmpty()) {
-                msgMap.put("is_registered", list1.toArray());
-             }
-          */
-          code.append(codeForComplexFieldExtraction(
-              desc,
-              fieldNameInCode,
-              "String",
-              indent,
-              ++varNum,
-              "String.valueOf",
-              ""));
-          break;
-        case BYTES:
-          /* Generate code for bytes field extraction
-            Example: If field has presence
-              if (msg.hasEmail()) {
-                msgMap.put("email", msg.getEmail().toByteArray());
-              }
-            OR if no presence:
-              msgMap.put("email", msg.getEmail().toByteArray());
-            OR if repeated:
-              List<Object> list1 = new ArrayList<>();
-              for (com.google.protobuf.ByteString row: msg.getEmailList()) {
-                list1.add(row.toByteArray());
-              }
-              if (!list1.isEmpty()) {
-                msgMap.put("email", list1.toArray());
-              }
-           */
-          code.append(codeForComplexFieldExtraction(
-              desc,
-              fieldNameInCode,
-              "com.google.protobuf.ByteString",
-              indent,
-              ++varNum,
-              "",
-              ".toByteArray()"));
-          break;
-        case ENUM:
-          /* Generate code for enum field extraction
-            Example: If field has presence
-              if (msg.hasStatus()) {
-                msgMap.put("status", msg.getStatus().name());
-              }
-            OR if no presence:
-              msgMap.put("status", msg.getStatus().name());
-            OR if repeated:
-              List<Object> list1 = new ArrayList<>();
-              for (Status row: msg.getStatusList()) {
-                list1.add(row.name());
-              }
-              if (!list1.isEmpty()) {
-                msgMap.put("status", list1.toArray());
-              }
-           */
-          code.append(codeForComplexFieldExtraction(
-              desc,
-              fieldNameInCode,
-              ProtoBufUtils.getFullJavaNameForEnum(desc.getEnumType()),
-              indent,
-              ++varNum,
-              "",
-              ".name()"));
-          break;
-        case MESSAGE:
-          String messageType = ProtoBufUtils.getFullJavaName(desc.getMessageType());
-          if (desc.isMapField()) {
-            // Generated code for Map extraction. The key for the map is always a scalar object in Protobuf.
-            Descriptors.FieldDescriptor valueDescriptor = desc.getMessageType().findFieldByName("value");
-            if (valueDescriptor.getType() == Descriptors.FieldDescriptor.Type.MESSAGE) {
-              /* Generate code for map field extraction if the value type is a message
-              Example: If field has presence
-                if (msg.hasComplexMap()) {
-                  Map<Object, Map<String, Object>> map1 = new HashMap<>();
-                  for (Map.Entry<String, ComplexTypes.TestMessage.NestedMessage> entry: msg.getComplexMapMap()
-                    .entrySet()) {
-                    map1.put(entry.getKey(), decodeComplexTypes_TestMessage_NestedMessageMessage(entry.getValue()));
-                  }
-                  msgMap.put("complex_map", map1);
-                }
-              OR if no presence:
-                Map<Object, Map<String, Object>> map1 = new HashMap<>();
-                for (Map.Entry<String, ComplexTypes.TestMessage.NestedMessage> entry: msg.getComplexMapMap().entrySet())
-                {
-                  map1.put(entry.getKey(), decodeComplexTypes_TestMessage_NestedMessageMessage(entry.getValue()));
-                }
-                msgMap.put("complex_map", map1);
-             */
-              String valueDescClassName = ProtoBufUtils.getFullJavaName(valueDescriptor.getMessageType());
-              if (!msgDecodeCode.containsKey(valueDescClassName)) {
-                queue.add(valueDescriptor.getMessageType());
-              }
-              code.append(codeForMapWithValueMessageType(desc, fieldNameInCode, valueDescClassName, indent, varNum));
-              break;
-            } else {
-              /* Generate code for map field extraction if the value type is a scalar
-                msgMap.put("simple_map", msg.getSimpleMapMap());
-               */
-              code.append(completeLine(putFieldInMsgMapCode(desc.getName(),
-                  getProtoFieldMethodName(fieldNameInCode + "Map"), null, null),
-                  indent));
-            }
-          } else {
-            if (!msgDecodeCode.containsKey(messageType)) {
-              queue.add(desc.getMessageType());
-            }
-            code.append(codeForComplexFieldExtraction(desc, fieldNameInCode, messageType, indent, ++varNum,
-                getDecoderMethodName(messageType), ""));
-          }
-          break;
-        default:
-          LOGGER.error(String.format("Protobuf type %s is not supported by pinot yet. Skipping this field %s",
-              type, desc.getName()));
-          break;
-      }
-    }
-    code.append(completeLine("return msgMap", indent));
-    code.append(addIndent("}", --indent));
-    msgDecodeCode.put(fullyQualifiedMsgName, new MessageDecoderMethod(methodNameOfDecoder, code.toString()));
+    return descriptorsToDerive;
   }
+
+  private void generateFieldExtractionCode(Map<String, MessageDecoderMethod> msgDecodeCode,
+      Queue<Descriptors.Descriptor> queue, Descriptors.FieldDescriptor desc, int indent, int varNum,
+      StringBuilder code) {
+    Descriptors.FieldDescriptor.Type type = desc.getType();
+    String fieldNameInCode = ProtobufInternalUtils.underScoreToCamelCase(desc.getName(), true);
+    switch (type) {
+      case STRING:
+      case INT32:
+      case INT64:
+      case UINT64:
+      case FIXED64:
+      case FIXED32:
+      case UINT32:
+      case SFIXED32:
+      case SFIXED64:
+      case SINT32:
+      case SINT64:
+      case DOUBLE:
+      case FLOAT:
+        /* Generate code for scalar field extraction
+         * Example: If field has presence
+         *   if (msg.hasEmail()) {
+         *     msgMap.put("email", msg.getEmail());
+         *   }
+         * OR if no presence:
+         *   msgMap.put("email", msg.getEmail());
+         * OR if repeated:
+         *  if (msg.getEmailCount() > 0) {
+         *    msgMap.put("email", msg.getEmailList().toArray());
+         *  }
+         */
+        code.append(codeForScalarFieldExtraction(desc, fieldNameInCode, indent));
+        break;
+      case BOOL:
+        /* Generate code for boolean field extraction
+         * Example: If field has presence
+         * if (msg.hasIsRegistered()) {
+         *   msgMap.put("is_registered", String.valueOf(msg.getIsRegistered()));
+         * }
+         * OR if no presence:
+         *   msgMap.put("is_registered", String.valueOf(msg.getIsRegistered()));
+         * OR if repeated:
+         *   List<Object> list1 = new ArrayList<>();
+         *   for (String row: msg.getIsRegisteredList()) {
+         *     list3.add(String.valueOf(row));
+         *   }
+         *   if (!list1.isEmpty()) {
+         *     msgMap.put("is_registered", list1.toArray());
+         *   }
+         */
+        code.append(codeForComplexFieldExtraction(
+            desc,
+            fieldNameInCode,
+            "String",
+            indent,
+            ++varNum,
+            "String.valueOf",
+            ""));
+        break;
+      case BYTES:
+        /* Generate code for bytes field extraction
+         * Example: If field has presence
+         * if (msg.hasEmail()) {
+         *   msgMap.put("email", msg.getEmail().toByteArray());
+         * }
+         * OR if no presence:
+         *   msgMap.put("email", msg.getEmail().toByteArray());
+         * OR if repeated:
+         *   List<Object> list1 = new ArrayList<>();
+         *   for (com.google.protobuf.ByteString row: msg.getEmailList()) {
+         *     list1.add(row.toByteArray());
+         *   }
+         *   if (!list1.isEmpty()) {
+         *     msgMap.put("email", list1.toArray());
+         *   }
+         */
+        code.append(codeForComplexFieldExtraction(
+            desc,
+            fieldNameInCode,
+            "com.google.protobuf.ByteString",
+            indent,
+            ++varNum,
+            "",
+            ".toByteArray()"));
+        break;
+      case ENUM:
+        /* Generate code for enum field extraction
+         * Example: If field has presence
+         * if (msg.hasStatus()) {
+         *   msgMap.put("status", msg.getStatus().name());
+         * }
+         * OR if no presence:
+         *   msgMap.put("status", msg.getStatus().name());
+         * OR if repeated:
+         *   List<Object> list1 = new ArrayList<>();
+         *   for (Status row: msg.getStatusList()) {
+         *     list1.add(row.name());
+         *   }
+         *   if (!list1.isEmpty()) {
+         *     msgMap.put("status", list1.toArray());
+         *   }
+         */
+        code.append(codeForComplexFieldExtraction(
+            desc,
+            fieldNameInCode,
+            ProtoBufUtils.getFullJavaNameForEnum(desc.getEnumType()),
+            indent,
+            ++varNum,
+            "",
+            ".name()"));
+        break;
+      case MESSAGE:
+        generateMessageFieldExtractionCode(msgDecodeCode, queue, desc, fieldNameInCode, indent, varNum, code);
+        break;
+      default:
+        LOGGER.error(String.format("Protobuf type %s is not supported by pinot yet. Skipping this field %s",
+            type, desc.getName()));
+        break;
+    }
+  }
+
+  private void generateMessageFieldExtractionCode(Map<String, MessageDecoderMethod> msgDecodeCode,
+      Queue<Descriptors.Descriptor> queue, Descriptors.FieldDescriptor desc, String fieldNameInCode,
+      int indent, int varNum, StringBuilder code) {
+    String messageType = ProtoBufUtils.getFullJavaName(desc.getMessageType());
+    if (desc.isMapField()) {
+      // Generated code for Map extraction. The key for the map is always a scalar object in Protobuf.
+      Descriptors.FieldDescriptor valueDescriptor = desc.getMessageType().findFieldByName("value");
+      if (valueDescriptor.getType() == Descriptors.FieldDescriptor.Type.MESSAGE) {
+        /* Generate code for map field extraction if the value type is a message
+         * Example: If field has presence
+         * if (msg.hasComplexMap()) {
+         *   Map<Object, Map<String, Object>> map1 = new HashMap<>();
+         *   for (Map.Entry<String, ComplexTypes.TestMessage.NestedMessage> entry: msg.getComplexMapMap()
+         *   .entrySet()) {
+         *     map1.put(entry.getKey(), decodeComplexTypes_TestMessage_NestedMessageMessage(entry.getValue()));
+         *   }
+         *   msgMap.put("complex_map", map1);
+         * }
+         * OR if no presence:
+         *   Map<Object, Map<String, Object>> map1 = new HashMap<>();
+         *     for (Map.Entry<String, ComplexTypes.TestMessage.NestedMessage> entry: msg.getComplexMapMap().entrySet())
+         *     {
+         *     map1.put(entry.getKey(), decodeComplexTypes_TestMessage_NestedMessageMessage(entry.getValue()));
+         *   }
+         *   msgMap.put("complex_map", map1);
+         */
+        String valueDescClassName = ProtoBufUtils.getFullJavaName(valueDescriptor.getMessageType());
+        if (!msgDecodeCode.containsKey(valueDescClassName)) {
+          queue.add(valueDescriptor.getMessageType());
+        }
+        code.append(codeForMapWithValueMessageType(desc, fieldNameInCode, valueDescClassName, indent, varNum));
+      } else {
+        /* Generate code for map field extraction if the value type is a scalar
+         * msgMap.put("simple_map", msg.getSimpleMapMap());
+         */
+        code.append(completeLine(putFieldInMsgMapCode(desc.getName(),
+            getProtoFieldMethodName(fieldNameInCode + "Map"), null, null),
+            indent));
+      }
+    } else {
+      if (!msgDecodeCode.containsKey(messageType)) {
+        queue.add(desc.getMessageType());
+      }
+      code.append(codeForComplexFieldExtraction(desc, fieldNameInCode, messageType, indent, ++varNum,
+          getDecoderMethodName(messageType), ""));
+    }
+  }
+
+
+
+//Refactoring end
 
   /* Generate code for map field extraction if the value type is a Message
    * Example: If field has presence

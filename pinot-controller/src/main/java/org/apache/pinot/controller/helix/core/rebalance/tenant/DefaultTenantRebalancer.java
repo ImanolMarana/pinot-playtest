@@ -51,6 +51,23 @@ public class DefaultTenantRebalancer implements TenantRebalancer {
   public TenantRebalanceResult rebalance(TenantRebalanceConfig config) {
     Map<String, RebalanceResult> rebalanceResult = new HashMap<>();
     Set<String> tables = getTenantTables(config.getTenantName());
+
+    // Perform dry-run rebalance for each table
+    performDryRunRebalance(config, rebalanceResult, tables);
+
+    if (config.isDryRun() || config.isDowntime()) {
+      return new TenantRebalanceResult(null, rebalanceResult, config.isVerboseResult());
+    } else {
+      // Update rebalance result for in-progress tables
+      updateRebalanceResultForInProgress(rebalanceResult);
+    }
+
+    // Execute actual rebalance
+    return executeRebalance(config, rebalanceResult, tables);
+  }
+
+  private void performDryRunRebalance(TenantRebalanceConfig config, Map<String, RebalanceResult> rebalanceResult,
+      Set<String> tables) {
     tables.forEach(table -> {
       try {
         RebalanceConfig rebalanceConfig = RebalanceConfig.copy(config);
@@ -63,100 +80,122 @@ public class DefaultTenantRebalancer implements TenantRebalancer {
             null, null, null));
       }
     });
-    if (config.isDryRun() || config.isDowntime()) {
-      return new TenantRebalanceResult(null, rebalanceResult, config.isVerboseResult());
-    } else {
-      for (String table : rebalanceResult.keySet()) {
-        RebalanceResult result = rebalanceResult.get(table);
-        if (result.getStatus() == RebalanceResult.Status.DONE) {
-          rebalanceResult.put(table, new RebalanceResult(result.getJobId(), RebalanceResult.Status.IN_PROGRESS,
-              "In progress, check controller task status for the", result.getInstanceAssignment(),
-              result.getTierInstanceAssignment(), result.getSegmentAssignment()));
-        }
+  }
+
+  private void updateRebalanceResultForInProgress(Map<String, RebalanceResult> rebalanceResult) {
+    for (String table : rebalanceResult.keySet()) {
+      RebalanceResult result = rebalanceResult.get(table);
+      if (result.getStatus() == RebalanceResult.Status.DONE) {
+        rebalanceResult.put(table, new RebalanceResult(result.getJobId(), RebalanceResult.Status.IN_PROGRESS,
+            "In progress, check controller task status for the", result.getInstanceAssignment(),
+            result.getTierInstanceAssignment(), result.getSegmentAssignment()));
       }
     }
+  }
 
+  private TenantRebalanceResult executeRebalance(TenantRebalanceConfig config,
+      Map<String, RebalanceResult> rebalanceResult, Set<String> tables) {
     String tenantRebalanceJobId = createUniqueRebalanceJobIdentifier();
-    TenantRebalanceObserver observer = new ZkBasedTenantRebalanceObserver(tenantRebalanceJobId, config.getTenantName(),
-        tables, _pinotHelixResourceManager);
+    TenantRebalanceObserver observer = new ZkBasedTenantRebalanceObserver(tenantRebalanceJobId,
+        config.getTenantName(), tables, _pinotHelixResourceManager);
     observer.onTrigger(TenantRebalanceObserver.Trigger.START_TRIGGER, null, null);
     final Deque<String> sequentialQueue = new LinkedList<>();
     final Deque<String> parallelQueue = new ConcurrentLinkedDeque<>();
+
     // ensure atleast 1 thread is created to run the sequential table rebalance operations
     int parallelism = Math.max(config.getDegreeOfParallelism(), 1);
     Set<String> dimTables = getDimensionalTables(config.getTenantName());
     AtomicInteger activeThreads = new AtomicInteger(parallelism);
-    try {
-      if (parallelism > 1) {
-        Set<String> parallelTables;
-        if (!config.getParallelWhitelist().isEmpty()) {
-          parallelTables = new HashSet<>(config.getParallelWhitelist());
-        } else {
-          parallelTables = new HashSet<>(tables);
-        }
-        if (!config.getParallelBlacklist().isEmpty()) {
-          parallelTables = Sets.difference(parallelTables, config.getParallelBlacklist());
-        }
-        parallelTables.forEach(table -> {
-          if (dimTables.contains(table)) {
-            // prioritise dimension tables
-            parallelQueue.addFirst(table);
-          } else {
-            parallelQueue.addLast(table);
-          }
-        });
-        Sets.difference(tables, parallelTables).forEach(table -> {
-          if (dimTables.contains(table)) {
-            // prioritise dimension tables
-            sequentialQueue.addFirst(table);
-          } else {
-            sequentialQueue.addLast(table);
-          }
-        });
-      } else {
-        tables.forEach(table -> {
-          if (dimTables.contains(table)) {
-            // prioritise dimension tables
-            sequentialQueue.addFirst(table);
-          } else {
-            sequentialQueue.addLast(table);
-          }
-        });
-      }
 
-      for (int i = 0; i < parallelism; i++) {
-        _executorService.submit(() -> {
-          while (true) {
-            String table = parallelQueue.pollFirst();
-            if (table == null) {
-              break;
-            }
-            RebalanceConfig rebalanceConfig = RebalanceConfig.copy(config);
-            rebalanceConfig.setDryRun(false);
-            rebalanceTable(table, rebalanceConfig, rebalanceResult.get(table).getJobId(), observer);
-          }
-          // Last parallel thread to finish the table rebalance job will pick up the
-          // sequential table rebalance execution
-          if (activeThreads.decrementAndGet() == 0) {
-            RebalanceConfig rebalanceConfig = RebalanceConfig.copy(config);
-            rebalanceConfig.setDryRun(false);
-            while (true) {
-              String table = sequentialQueue.pollFirst();
-              if (table == null) {
-                break;
-              }
-              rebalanceTable(table, rebalanceConfig, rebalanceResult.get(table).getJobId(), observer);
-            }
-            observer.onSuccess(String.format("Successfully rebalanced tenant %s.", config.getTenantName()));
-          }
-        });
-      }
+    try {
+      // Populate parallel and sequential queues
+      populateRebalanceQueues(config, tables, dimTables, parallelQueue, sequentialQueue);
+
+      // Submit rebalance tasks to executor service
+      submitRebalanceTasks(config, rebalanceResult, observer, sequentialQueue, parallelQueue, parallelism,
+          activeThreads);
+
     } catch (Exception exception) {
       observer.onError(String.format("Failed to rebalance the tenant %s. Cause: %s", config.getTenantName(),
           exception.getMessage()));
     }
     return new TenantRebalanceResult(tenantRebalanceJobId, rebalanceResult, config.isVerboseResult());
   }
+
+  private void populateRebalanceQueues(TenantRebalanceConfig config, Set<String> tables, Set<String> dimTables,
+      Deque<String> parallelQueue, Deque<String> sequentialQueue) {
+    int parallelism = Math.max(config.getDegreeOfParallelism(), 1);
+    if (parallelism > 1) {
+      Set<String> parallelTables;
+      if (!config.getParallelWhitelist().isEmpty()) {
+        parallelTables = new HashSet<>(config.getParallelWhitelist());
+      } else {
+        parallelTables = new HashSet<>(tables);
+      }
+      if (!config.getParallelBlacklist().isEmpty()) {
+        parallelTables = Sets.difference(parallelTables, config.getParallelBlacklist());
+      }
+      parallelTables.forEach(table -> {
+        if (dimTables.contains(table)) {
+          // prioritise dimension tables
+          parallelQueue.addFirst(table);
+        } else {
+          parallelQueue.addLast(table);
+        }
+      });
+      Sets.difference(tables, parallelTables).forEach(table -> {
+        if (dimTables.contains(table)) {
+          // prioritise dimension tables
+          sequentialQueue.addFirst(table);
+        } else {
+          sequentialQueue.addLast(table);
+        }
+      });
+    } else {
+      tables.forEach(table -> {
+        if (dimTables.contains(table)) {
+          // prioritise dimension tables
+          sequentialQueue.addFirst(table);
+        } else {
+          sequentialQueue.addLast(table);
+        }
+      });
+    }
+  }
+
+  private void submitRebalanceTasks(TenantRebalanceConfig config, Map<String, RebalanceResult> rebalanceResult,
+      TenantRebalanceObserver observer, Deque<String> sequentialQueue, Deque<String> parallelQueue, int parallelism,
+      AtomicInteger activeThreads) {
+    for (int i = 0; i < parallelism; i++) {
+      _executorService.submit(() -> {
+        while (true) {
+          String table = parallelQueue.pollFirst();
+          if (table == null) {
+            break;
+          }
+          RebalanceConfig rebalanceConfig = RebalanceConfig.copy(config);
+          rebalanceConfig.setDryRun(false);
+          rebalanceTable(table, rebalanceConfig, rebalanceResult.get(table).getJobId(), observer);
+        }
+        // Last parallel thread to finish the table rebalance job will pick up the
+        // sequential table rebalance execution
+        if (activeThreads.decrementAndGet() == 0) {
+          RebalanceConfig rebalanceConfig = RebalanceConfig.copy(config);
+          rebalanceConfig.setDryRun(false);
+          while (true) {
+            String table = sequentialQueue.pollFirst();
+            if (table == null) {
+              break;
+            }
+            rebalanceTable(table, rebalanceConfig, rebalanceResult.get(table).getJobId(), observer);
+          }
+          observer.onSuccess(String.format("Successfully rebalanced tenant %s.", config.getTenantName()));
+        }
+      });
+    }
+  }
+
+//Refactoring end
 
   private Set<String> getDimensionalTables(String tenantName) {
     Set<String> dimTables = new HashSet<>();

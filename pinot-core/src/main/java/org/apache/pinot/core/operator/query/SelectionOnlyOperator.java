@@ -96,40 +96,55 @@ public class SelectionOnlyOperator extends BaseOperator<SelectionResultsBlock> {
   protected SelectionResultsBlock getNextBlock() {
     ValueBlock valueBlock;
     while ((valueBlock = _projectOperator.nextBlock()) != null) {
-      int numExpressions = _expressions.size();
-      for (int i = 0; i < numExpressions; i++) {
-        _blockValSets[i] = valueBlock.getBlockValueSet(_expressions.get(i));
-      }
-      RowBasedBlockValueFetcher blockValueFetcher = new RowBasedBlockValueFetcher(_blockValSets);
-
       int numDocsToAdd = Math.min(_numRowsToKeep - _rows.size(), valueBlock.getNumDocs());
-      _rows.ensureCapacity(_rows.size() + numDocsToAdd);
-      _numDocsScanned += numDocsToAdd;
-      if (_nullHandlingEnabled) {
-        for (int i = 0; i < numExpressions; i++) {
-          _nullBitmaps[i] = _blockValSets[i].getNullBitmap();
-        }
-        for (int docId = 0; docId < numDocsToAdd; docId++) {
-          Object[] values = blockValueFetcher.getRow(docId);
-          for (int colId = 0; colId < numExpressions; colId++) {
-            if (_nullBitmaps[colId] != null && _nullBitmaps[colId].contains(docId)) {
-              values[colId] = null;
-            }
-          }
-          _rows.add(values);
-        }
-      } else {
-        for (int i = 0; i < numDocsToAdd; i++) {
-          _rows.add(blockValueFetcher.getRow(i));
-        }
+      if (numDocsToAdd == 0) {
+        break;
       }
+      _numDocsScanned += numDocsToAdd;
+      collectRows(valueBlock, numDocsToAdd);
       if (_rows.size() == _numRowsToKeep) {
         break;
       }
     }
-
     return new SelectionResultsBlock(_dataSchema, _rows, _queryContext);
   }
+
+  private void collectRows(ValueBlock valueBlock, int numDocsToAdd) {
+    int numExpressions = _expressions.size();
+    for (int i = 0; i < numExpressions; i++) {
+      _blockValSets[i] = valueBlock.getBlockValueSet(_expressions.get(i));
+    }
+    RowBasedBlockValueFetcher blockValueFetcher = new RowBasedBlockValueFetcher(_blockValSets);
+    _rows.ensureCapacity(_rows.size() + numDocsToAdd);
+    if (_nullHandlingEnabled) {
+      collectRowsWithNullHandling(numExpressions, numDocsToAdd, blockValueFetcher);
+    } else {
+      collectRowsWithoutNullHandling(numDocsToAdd, blockValueFetcher);
+    }
+  }
+
+  private void collectRowsWithNullHandling(int numExpressions, int numDocsToAdd,
+      RowBasedBlockValueFetcher blockValueFetcher) {
+    for (int i = 0; i < numExpressions; i++) {
+      _nullBitmaps[i] = _blockValSets[i].getNullBitmap();
+    }
+    for (int docId = 0; docId < numDocsToAdd; docId++) {
+      Object[] values = blockValueFetcher.getRow(docId);
+      for (int colId = 0; colId < numExpressions; colId++) {
+        if (_nullBitmaps[colId] != null && _nullBitmaps[colId].contains(docId)) {
+          values[colId] = null;
+        }
+      }
+      _rows.add(values);
+    }
+  }
+
+  private void collectRowsWithoutNullHandling(int numDocsToAdd, RowBasedBlockValueFetcher blockValueFetcher) {
+    for (int i = 0; i < numDocsToAdd; i++) {
+      _rows.add(blockValueFetcher.getRow(i));
+    }
+  }
+//Refactoring end
 
   @Override
   public List<Operator> getChildOperators() {

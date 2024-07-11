@@ -63,7 +63,17 @@ public class InstanceTagPoolSelector {
     int tableNameHash = Math.abs(_tableNameWithType.hashCode());
     LOGGER.info("Starting instance tag/pool selection for table: {} with hash: {}", _tableNameWithType, tableNameHash);
 
-    // Filter out the instances with the correct tag
+    List<InstanceConfig> candidateInstanceConfigs = filterInstancesByTag(instanceConfigs);
+    int numCandidateInstances = candidateInstanceConfigs.size();
+    Preconditions.checkState(numCandidateInstances > 0, "No enabled instance has the tag: %s", _tagPoolConfig.getTag());
+    LOGGER.info("{} enabled instances have the tag: {} for table: {}", numCandidateInstances, _tagPoolConfig.getTag(),
+        _tableNameWithType);
+
+    return _tagPoolConfig.isPoolBased() ? selectInstancesFromPools(candidateInstanceConfigs, tableNameHash)
+        : selectInstancesWithoutPools(candidateInstanceConfigs);
+  }
+
+  private List<InstanceConfig> filterInstancesByTag(List<InstanceConfig> instanceConfigs) {
     String tag = _tagPoolConfig.getTag();
     List<InstanceConfig> candidateInstanceConfigs = new ArrayList<>();
     for (InstanceConfig instanceConfig : instanceConfigs) {
@@ -72,106 +82,136 @@ public class InstanceTagPoolSelector {
       }
     }
     candidateInstanceConfigs.sort(Comparator.comparing(InstanceConfig::getInstanceName));
-    int numCandidateInstances = candidateInstanceConfigs.size();
-    Preconditions.checkState(numCandidateInstances > 0, "No enabled instance has the tag: %s", tag);
-    LOGGER.info("{} enabled instances have the tag: {} for table: {}", numCandidateInstances, tag, _tableNameWithType);
+    return candidateInstanceConfigs;
+  }
 
+  private Map<Integer, List<InstanceConfig>> selectInstancesFromPools(List<InstanceConfig> candidateInstanceConfigs,
+      int tableNameHash) {
+    Map<Integer, List<InstanceConfig>> poolToInstanceConfigsMap = buildPoolToInstanceConfigsMap(
+        candidateInstanceConfigs);
+    Preconditions.checkState(!poolToInstanceConfigsMap.isEmpty(),
+        "No enabled instance has the pool configured for the tag: %s", _tagPoolConfig.getTag());
+
+    Map<Integer, Integer> poolToNumInstancesMap = new TreeMap<>();
+    for (Map.Entry<Integer, List<InstanceConfig>> entry : poolToInstanceConfigsMap.entrySet()) {
+      poolToNumInstancesMap.put(entry.getKey(), entry.getValue().size());
+    }
+    LOGGER.info("Number instances for each pool: {} for table: {}", poolToNumInstancesMap, _tableNameWithType);
+
+    Set<Integer> selectedPools = selectPools(poolToInstanceConfigsMap.keySet(), tableNameHash);
+
+    // Keep the pools selected
+    LOGGER.info("Selecting pools: {} for table: {}", selectedPools, _tableNameWithType);
+    poolToInstanceConfigsMap.keySet().retainAll(selectedPools);
+    return poolToInstanceConfigsMap;
+  }
+
+  private Map<Integer, List<InstanceConfig>> buildPoolToInstanceConfigsMap(
+      List<InstanceConfig> candidateInstanceConfigs) {
     Map<Integer, List<InstanceConfig>> poolToInstanceConfigsMap = new TreeMap<>();
-    if (_tagPoolConfig.isPoolBased()) {
-      // Pool based selection
+    Map<String, Integer> instanceToPoolMap = new HashMap<>();
+    for (InstanceConfig instanceConfig : candidateInstanceConfigs) {
+      Map<String, String> poolMap = instanceConfig.getRecord().getMapField(InstanceUtils.POOL_KEY);
+      if (poolMap != null && poolMap.containsKey(_tagPoolConfig.getTag())) {
+        int pool = Integer.parseInt(poolMap.get(_tagPoolConfig.getTag()));
+        poolToInstanceConfigsMap.computeIfAbsent(pool, k -> new ArrayList<>()).add(instanceConfig);
+        instanceToPoolMap.put(instanceConfig.getInstanceName(), pool);
+      }
+    }
+    return poolToInstanceConfigsMap;
+  }
 
-      Map<String, Integer> instanceToPoolMap = new HashMap<>();
-      // Extract the pool information from the instance configs
-      for (InstanceConfig instanceConfig : candidateInstanceConfigs) {
-        Map<String, String> poolMap = instanceConfig.getRecord().getMapField(InstanceUtils.POOL_KEY);
-        if (poolMap != null && poolMap.containsKey(tag)) {
-          int pool = Integer.parseInt(poolMap.get(tag));
-          poolToInstanceConfigsMap.computeIfAbsent(pool, k -> new ArrayList<>()).add(instanceConfig);
+  private Set<Integer> selectPools(Set<Integer> pools, int tableNameHash) {
+    List<Integer> poolsToSelect = _tagPoolConfig.getPools();
+    if (!CollectionUtils.isEmpty(poolsToSelect)) {
+      Preconditions.checkState(pools.containsAll(poolsToSelect), "Cannot find all instance pools configured: %s",
+          poolsToSelect);
+      return new TreeSet<>(poolsToSelect);
+    }
+
+    int numPools = pools.size();
+    int numPoolsToSelect =
+        _tagPoolConfig.getNumPools() > 0 ? Math.min(_tagPoolConfig.getNumPools(), numPools) : numPools;
+
+    if (numPools == numPoolsToSelect) {
+      LOGGER.info("Selecting all {} pools: {} for table: {}", numPools, pools, _tableNameWithType);
+      return pools;
+    }
+
+    return selectPoolsBasedOnDistribution(pools, tableNameHash, numPoolsToSelect);
+  }
+
+  private Set<Integer> selectPoolsBasedOnDistribution(Set<Integer> pools, int tableNameHash, int numPoolsToSelect) {
+    List<Integer> poolsInCluster = new ArrayList<>(pools);
+    int startIndex = Math.abs(tableNameHash % pools.size());
+    List<Integer> selectedPools = new ArrayList<>(numPoolsToSelect);
+
+    if (_minimizeDataMovement) {
+      assert _existingInstancePartitions != null;
+      Map<Integer, Integer> poolToNumExistingInstancesMap = calculatePoolToExistingInstancesMap(poolsInCluster);
+      List<Triple<Integer, Integer, Integer>> sortedPools = sortPoolsByExistingInstances(poolsInCluster, startIndex,
+          poolToNumExistingInstancesMap);
+      for (int i = 0; i < numPoolsToSelect; i++) {
+        selectedPools.add(sortedPools.get(i).getLeft());
+      }
+    } else {
+      for (int i = 0; i < numPoolsToSelect; i++) {
+        selectedPools.add(poolsInCluster.get((startIndex + i) % poolsInCluster.size()));
+      }
+    }
+    return new TreeSet<>(selectedPools);
+  }
+
+  private Map<Integer, Integer> calculatePoolToExistingInstancesMap(List<Integer> poolsInCluster) {
+    Map<String, Integer> instanceToPoolMap = new HashMap<>();
+    for (int pool : poolsInCluster) {
+      for (InstanceConfig instanceConfig : _existingInstancePartitions.getInstances(0, 0)) {
+        if (instanceConfig.getRecord().getMapField(InstanceUtils.POOL_KEY) != null
+            && instanceConfig.getRecord().getMapField(InstanceUtils.POOL_KEY).containsValue(String.valueOf(pool))) {
           instanceToPoolMap.put(instanceConfig.getInstanceName(), pool);
         }
       }
-      Preconditions.checkState(!poolToInstanceConfigsMap.isEmpty(),
-          "No enabled instance has the pool configured for the tag: %s", tag);
-      Map<Integer, Integer> poolToNumInstancesMap = new TreeMap<>();
-      for (Map.Entry<Integer, List<InstanceConfig>> entry : poolToInstanceConfigsMap.entrySet()) {
-        poolToNumInstancesMap.put(entry.getKey(), entry.getValue().size());
-      }
-      LOGGER.info("Number instances for each pool: {} for table: {}", poolToNumInstancesMap, _tableNameWithType);
-
-      // Calculate the pools to select based on the selection config
-      Set<Integer> pools = poolToInstanceConfigsMap.keySet();
-      List<Integer> poolsToSelect = _tagPoolConfig.getPools();
-      if (!CollectionUtils.isEmpty(poolsToSelect)) {
-        Preconditions.checkState(pools.containsAll(poolsToSelect), "Cannot find all instance pools configured: %s",
-            poolsToSelect);
-      } else {
-        int numPools = poolToInstanceConfigsMap.size();
-        int numPoolsToSelect = _tagPoolConfig.getNumPools();
-        if (numPoolsToSelect > 0) {
-          Preconditions.checkState(numPoolsToSelect <= numPools,
-              "Not enough instance pools (%s in the cluster, asked for %s)", numPools, numPoolsToSelect);
-        } else {
-          numPoolsToSelect = numPools;
-        }
-
-        // Directly return the map if all the pools are selected
-        if (numPools == numPoolsToSelect) {
-          LOGGER.info("Selecting all {} pools: {} for table: {}", numPools, pools, _tableNameWithType);
-          return poolToInstanceConfigsMap;
-        }
-
-        // Select pools based on the table name hash to evenly distribute the tables
-        List<Integer> poolsInCluster = new ArrayList<>(pools);
-        int startIndex = Math.abs(tableNameHash % numPools);
-        poolsToSelect = new ArrayList<>(numPoolsToSelect);
-        if (_minimizeDataMovement) {
-          assert _existingInstancePartitions != null;
-          Map<Integer, Integer> poolToNumExistingInstancesMap = new TreeMap<>();
-          int existingNumPartitions = _existingInstancePartitions.getNumPartitions();
-          int existingNumReplicaGroups = _existingInstancePartitions.getNumReplicaGroups();
-          for (int partitionId = 0; partitionId < existingNumPartitions; partitionId++) {
-            for (int replicaGroupId = 0; replicaGroupId < existingNumReplicaGroups; replicaGroupId++) {
-              List<String> existingInstances = _existingInstancePartitions.getInstances(partitionId, replicaGroupId);
-              for (String existingInstance : existingInstances) {
-                Integer existingPool = instanceToPoolMap.get(existingInstance);
-                if (existingPool != null) {
-                  poolToNumExistingInstancesMap.merge(existingPool, 1, Integer::sum);
-                }
-              }
-            }
-          }
-          // Sort the pools based on the number of existing instances in the pool in descending order, then use the
-          // table name hash to break even
-          // Triple stores (pool, numExistingInstances, poolIndex) for sorting
-          List<Triple<Integer, Integer, Integer>> triples = new ArrayList<>(numPools);
-          for (int i = 0; i < numPools; i++) {
-            int pool = poolsInCluster.get((startIndex + i) % numPools);
-            triples.add(Triple.of(pool, poolToNumExistingInstancesMap.getOrDefault(pool, 0), i));
-          }
-          triples.sort((o1, o2) -> {
-            int result = Integer.compare(o2.getMiddle(), o1.getMiddle());
-            return result != 0 ? result : Integer.compare(o1.getRight(), o2.getRight());
-          });
-          for (int i = 0; i < numPoolsToSelect; i++) {
-            poolsToSelect.add(triples.get(i).getLeft());
-          }
-        } else {
-          for (int i = 0; i < numPoolsToSelect; i++) {
-            poolsToSelect.add(poolsInCluster.get((startIndex + i) % numPools));
-          }
-        }
-      }
-
-      // Keep the pools selected
-      LOGGER.info("Selecting pools: {} for table: {}", poolsToSelect, _tableNameWithType);
-      pools.retainAll(poolsToSelect);
-    } else {
-      // Non-pool based selection
-
-      LOGGER.info("Selecting {} instances for table: {}", numCandidateInstances, _tableNameWithType);
-      // Put all instance configs as pool 0
-      poolToInstanceConfigsMap.put(0, candidateInstanceConfigs);
     }
+
+    Map<Integer, Integer> poolToNumExistingInstancesMap = new TreeMap<>();
+    int existingNumPartitions = _existingInstancePartitions.getNumPartitions();
+    int existingNumReplicaGroups = _existingInstancePartitions.getNumReplicaGroups();
+    for (int partitionId = 0; partitionId < existingNumPartitions; partitionId++) {
+      for (int replicaGroupId = 0; replicaGroupId < existingNumReplicaGroups; replicaGroupId++) {
+        List<String> existingInstances = _existingInstancePartitions.getInstances(partitionId, replicaGroupId);
+        for (String existingInstance : existingInstances) {
+          Integer existingPool = instanceToPoolMap.get(existingInstance);
+          if (existingPool != null) {
+            poolToNumExistingInstancesMap.merge(existingPool, 1, Integer::sum);
+          }
+        }
+      }
+    }
+    return poolToNumExistingInstancesMap;
+  }
+
+  private List<Triple<Integer, Integer, Integer>> sortPoolsByExistingInstances(List<Integer> poolsInCluster,
+      int startIndex, Map<Integer, Integer> poolToNumExistingInstancesMap) {
+    List<Triple<Integer, Integer, Integer>> triples = new ArrayList<>(poolsInCluster.size());
+    for (int i = 0; i < poolsInCluster.size(); i++) {
+      int pool = poolsInCluster.get((startIndex + i) % poolsInCluster.size());
+      triples.add(Triple.of(pool, poolToNumExistingInstancesMap.getOrDefault(pool, 0), i));
+    }
+    triples.sort((o1, o2) -> {
+      int result = Integer.compare(o2.getMiddle(), o1.getMiddle());
+      return result != 0 ? result : Integer.compare(o1.getRight(), o2.getRight());
+    });
+    return triples;
+  }
+
+  private Map<Integer, List<InstanceConfig>> selectInstancesWithoutPools(
+      List<InstanceConfig> candidateInstanceConfigs) {
+    LOGGER.info("Selecting {} instances for table: {}", candidateInstanceConfigs.size(), _tableNameWithType);
+    Map<Integer, List<InstanceConfig>> poolToInstanceConfigsMap = new TreeMap<>();
+    poolToInstanceConfigsMap.put(0, candidateInstanceConfigs);
     return poolToInstanceConfigsMap;
+  }
+
+//Refactoring end
   }
 }

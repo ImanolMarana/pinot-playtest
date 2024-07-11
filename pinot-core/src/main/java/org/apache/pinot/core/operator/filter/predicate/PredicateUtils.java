@@ -80,115 +80,113 @@ public class PredicateUtils {
     List<String> values = inPredicate.getValues();
     int hashSetSize = Integer.min(HashUtil.getMinHashSetSize(values.size()), MAX_INITIAL_DICT_ID_SET_SIZE);
     IntSet dictIdSet = new IntOpenHashSet(hashSetSize);
+
+    if (dataType == DataType.STRING) {
+      handleStringDataType(inPredicate, dictionary, queryContext, values, dictIdSet);
+    } else {
+      handleOtherDataTypes(inPredicate, dictionary, dataType, dictIdSet);
+    }
+
+    return dictIdSet;
+  }
+
+  private static void handleStringDataType(BaseInPredicate inPredicate, Dictionary dictionary,
+      @Nullable QueryContext queryContext, List<String> values, IntSet dictIdSet) {
+    if (queryContext == null || values.size() <= 1) {
+      dictionary.getDictIds(values, dictIdSet);
+      return;
+    }
+
+    Dictionary.SortedBatchLookupAlgorithm lookupAlgorithm = getLookupAlgorithm(queryContext);
+    if (lookupAlgorithm == Dictionary.SortedBatchLookupAlgorithm.PLAIN_BINARY_SEARCH) {
+      dictionary.getDictIds(values, dictIdSet);
+      return;
+    }
+
+    if (Boolean.parseBoolean(queryContext.getQueryOptions().get(QueryOptionKey.IN_PREDICATE_PRE_SORTED))) {
+      dictionary.getDictIds(values, dictIdSet, lookupAlgorithm);
+    } else {
+      //noinspection unchecked
+      dictionary.getDictIds(
+          queryContext.getOrComputeSharedValue(List.class, Equivalence.identity().wrap(inPredicate), k -> {
+            List<String> sortedValues = new ArrayList<>(values);
+            sortedValues.sort(null);
+            return sortedValues;
+          }), dictIdSet, lookupAlgorithm);
+    }
+  }
+
+  private static Dictionary.SortedBatchLookupAlgorithm getLookupAlgorithm(QueryContext queryContext) {
+    Dictionary.SortedBatchLookupAlgorithm lookupAlgorithm =
+        Dictionary.SortedBatchLookupAlgorithm.DIVIDE_BINARY_SEARCH;
+    String inPredicateLookupAlgorithm =
+        queryContext.getQueryOptions().get(QueryOptionKey.IN_PREDICATE_LOOKUP_ALGORITHM);
+    if (inPredicateLookupAlgorithm != null) {
+      try {
+        lookupAlgorithm = Dictionary.SortedBatchLookupAlgorithm.valueOf(inPredicateLookupAlgorithm.toUpperCase());
+      } catch (Exception e) {
+        throw new IllegalArgumentException("Illegal IN predicate lookup algorithm: " + inPredicateLookupAlgorithm);
+      }
+    }
+    return lookupAlgorithm;
+  }
+
+  private static void handleOtherDataTypes(BaseInPredicate inPredicate, Dictionary dictionary, DataType dataType,
+      IntSet dictIdSet) {
     switch (dataType) {
       case INT:
-        int[] intValues = inPredicate.getIntValues();
-        for (int value : intValues) {
-          int dictId = dictionary.indexOf(value);
-          if (dictId >= 0) {
-            dictIdSet.add(dictId);
-          }
+        for (int value : inPredicate.getIntValues()) {
+          addDictIdIfExists(dictionary, dictIdSet, value);
         }
         break;
       case LONG:
-        long[] longValues = inPredicate.getLongValues();
-        for (long value : longValues) {
-          int dictId = dictionary.indexOf(value);
-          if (dictId >= 0) {
-            dictIdSet.add(dictId);
-          }
+        for (long value : inPredicate.getLongValues()) {
+          addDictIdIfExists(dictionary, dictIdSet, value);
         }
         break;
       case FLOAT:
-        float[] floatValues = inPredicate.getFloatValues();
-        for (float value : floatValues) {
-          int dictId = dictionary.indexOf(value);
-          if (dictId >= 0) {
-            dictIdSet.add(dictId);
-          }
+        for (float value : inPredicate.getFloatValues()) {
+          addDictIdIfExists(dictionary, dictIdSet, value);
         }
         break;
       case DOUBLE:
-        double[] doubleValues = inPredicate.getDoubleValues();
-        for (double value : doubleValues) {
-          int dictId = dictionary.indexOf(value);
-          if (dictId >= 0) {
-            dictIdSet.add(dictId);
-          }
+        for (double value : inPredicate.getDoubleValues()) {
+          addDictIdIfExists(dictionary, dictIdSet, value);
         }
         break;
       case BIG_DECIMAL:
-        BigDecimal[] bigDecimalValues = inPredicate.getBigDecimalValues();
-        for (BigDecimal value : bigDecimalValues) {
-          int dictId = dictionary.indexOf(value);
-          if (dictId >= 0) {
-            dictIdSet.add(dictId);
-          }
+        for (BigDecimal value : inPredicate.getBigDecimalValues()) {
+          addDictIdIfExists(dictionary, dictIdSet, value);
         }
         break;
       case BOOLEAN:
-        int[] booleanValues = inPredicate.getBooleanValues();
-        for (int value : booleanValues) {
-          int dictId = dictionary.indexOf(value);
-          if (dictId >= 0) {
-            dictIdSet.add(dictId);
-          }
+        for (int value : inPredicate.getBooleanValues()) {
+          addDictIdIfExists(dictionary, dictIdSet, value);
         }
         break;
       case TIMESTAMP:
-        long[] timestampValues = inPredicate.getTimestampValues();
-        for (long value : timestampValues) {
-          int dictId = dictionary.indexOf(value);
-          if (dictId >= 0) {
-            dictIdSet.add(dictId);
-          }
-        }
-        break;
-      case STRING:
-        if (queryContext == null || values.size() <= 1) {
-          dictionary.getDictIds(values, dictIdSet);
-          break;
-        }
-        Dictionary.SortedBatchLookupAlgorithm lookupAlgorithm =
-            Dictionary.SortedBatchLookupAlgorithm.DIVIDE_BINARY_SEARCH;
-        String inPredicateLookupAlgorithm =
-            queryContext.getQueryOptions().get(QueryOptionKey.IN_PREDICATE_LOOKUP_ALGORITHM);
-        if (inPredicateLookupAlgorithm != null) {
-          try {
-            lookupAlgorithm = Dictionary.SortedBatchLookupAlgorithm.valueOf(inPredicateLookupAlgorithm.toUpperCase());
-          } catch (Exception e) {
-            throw new IllegalArgumentException("Illegal IN predicate lookup algorithm: " + inPredicateLookupAlgorithm);
-          }
-        }
-        if (lookupAlgorithm == Dictionary.SortedBatchLookupAlgorithm.PLAIN_BINARY_SEARCH) {
-          dictionary.getDictIds(values, dictIdSet);
-          break;
-        }
-        if (Boolean.parseBoolean(queryContext.getQueryOptions().get(QueryOptionKey.IN_PREDICATE_PRE_SORTED))) {
-          dictionary.getDictIds(values, dictIdSet, lookupAlgorithm);
-        } else {
-          //noinspection unchecked
-          dictionary.getDictIds(
-              queryContext.getOrComputeSharedValue(List.class, Equivalence.identity().wrap(inPredicate), k -> {
-                List<String> sortedValues = new ArrayList<>(values);
-                sortedValues.sort(null);
-                return sortedValues;
-              }), dictIdSet, lookupAlgorithm);
+        for (long value : inPredicate.getTimestampValues()) {
+          addDictIdIfExists(dictionary, dictIdSet, value);
         }
         break;
       case BYTES:
-        ByteArray[] bytesValues = inPredicate.getBytesValues();
-        for (ByteArray value : bytesValues) {
-          int dictId = dictionary.indexOf(value);
-          if (dictId >= 0) {
-            dictIdSet.add(dictId);
-          }
+        for (ByteArray value : inPredicate.getBytesValues()) {
+          addDictIdIfExists(dictionary, dictIdSet, value);
         }
         break;
       default:
         throw new IllegalStateException("Unsupported data type: " + dataType);
     }
-    return dictIdSet;
+  }
+
+  private static void addDictIdIfExists(Dictionary dictionary, IntSet dictIdSet, Object value) {
+    int dictId = dictionary.indexOf(value);
+    if (dictId >= 0) {
+      dictIdSet.add(dictId);
+    }
+  }
+
+//Refactoring end
   }
 
   public static int[] flipDictIds(int[] dictIds, int length) {

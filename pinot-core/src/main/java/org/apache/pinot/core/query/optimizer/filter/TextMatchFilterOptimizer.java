@@ -64,43 +64,97 @@ public class TextMatchFilterOptimizer implements FilterOptimizer {
 
     List<Expression> newChildren = new ArrayList<>();
     Map<Expression, List<Expression>> textMatchMap = new HashMap<>();
-    boolean recreateFilter = false;
+    boolean recreateFilter = hasMultipleTextMatchFilters(children, textMatchMap);
 
-    // iterate over all child expressions to collect TEXT_MATCH filters for each identifier
+    if (recreateFilter) {
+      return getNewFilter(operator, newChildren, textMatchMap);
+    }
+    return filterExpression;
+  }
+
+  private boolean hasMultipleTextMatchFilters(List<Expression> children,
+      Map<Expression, List<Expression>> textMatchMap) {
     for (Expression child : children) {
       Function childFunction = child.getFunctionCall();
       if (childFunction == null) {
-        newChildren.add(child);
-      } else {
-        String childOperator = childFunction.getOperator();
-        if (childOperator.equals(FilterKind.TEXT_MATCH.name())) {
-          List<Expression> operands = childFunction.getOperands();
-          Expression identifier = operands.get(0);
-          textMatchMap.computeIfAbsent(identifier, k -> new ArrayList<>()).add(child);
-        } else if (childOperator.equals(FilterKind.NOT.name())) {
-          assert childFunction.getOperands().size() == 1;
-          Expression operand = childFunction.getOperands().get(0);
-          Function notChildFunction = operand.getFunctionCall();
-          if (notChildFunction == null) {
-            newChildren.add(child);
-            continue;
-          }
-          if (notChildFunction.getOperator().equals(FilterKind.TEXT_MATCH.name())) {
-            List<Expression> operands = notChildFunction.getOperands();
-            Expression identifier = operands.get(0);
-            textMatchMap.computeIfAbsent(identifier, k -> new ArrayList<>()).add(child);
-            continue;
-          }
-          newChildren.add(child);
-        } else {
-          Expression newChild = optimize(child);
-          if (!newChild.equals(child)) {
-            recreateFilter = true;
-          }
-          newChildren.add(optimize(child));
-        }
+        continue;
+      }
+      String childOperator = childFunction.getOperator();
+      if (isTextMatchFilter(childOperator)) {
+        Expression identifier = childFunction.getOperands().get(0);
+        textMatchMap.computeIfAbsent(identifier, k -> new ArrayList<>()).add(child);
+      } else if (childOperator.equals(FilterKind.NOT.name()) && isTextMatchFilter(
+          childFunction.getOperands().get(0))) {
+        Expression operand = childFunction.getOperands().get(0);
+        Expression identifier = operand.getFunctionCall().getOperands().get(0);
+        textMatchMap.computeIfAbsent(identifier, k -> new ArrayList<>()).add(child);
       }
     }
+
+    for (List<Expression> values : textMatchMap.values()) {
+      if (values.size() > 1) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+
+  private boolean isTextMatchFilter(String operator) {
+    return operator.equals(FilterKind.TEXT_MATCH.name());
+  }
+
+  private boolean isTextMatchFilter(Expression expression) {
+    if (expression.getFunctionCall() == null) {
+      return false;
+    }
+    return isTextMatchFilter(expression.getFunctionCall().getOperator());
+  }
+
+  private Expression getNewFilter(String operator, List<Expression> newChildren,
+      Map<Expression, List<Expression>> textMatchMap) {
+    // for each key in textMatchMap, build a TEXT_MATCH expression (merge list of filters)
+    for (Map.Entry<Expression, List<Expression>> entry : textMatchMap.entrySet()) {
+      List<String> literals = new ArrayList<>();
+      boolean allNot = entry.getValue().stream().allMatch(e -> e.getFunctionCall().getOperator().equals(FilterKind.NOT.name()));
+
+      for (Expression expression : entry.getValue()) {
+        if (allNot) {
+          literals.add(expression.getFunctionCall().getOperands().get(0).getFunctionCall().getOperands().get(1).getLiteral().getStringValue());
+        } else {
+          literals.add(getTextMatchLiteral(expression));
+        }
+      }
+
+      Expression mergedTextMatchExpression = createMergedTextMatchExpression(entry.getKey(), literals, allNot, operator);
+
+      newChildren.add(allNot ? RequestUtils.getFunctionExpression(FilterKind.NOT.name(), mergedTextMatchExpression) : mergedTextMatchExpression);
+    }
+
+    return newChildren.size() == 1 ? newChildren.get(0) : RequestUtils.getFunctionExpression(operator, newChildren);
+  }
+
+  private String getTextMatchLiteral(Expression expression) {
+    if (expression.getFunctionCall().getOperator().equals(FilterKind.NOT.name())) {
+      Expression operand = expression.getFunctionCall().getOperands().get(0);
+      return FilterKind.NOT.name() + SPACE + operand.getFunctionCall().getOperands().get(1).getLiteral()
+          .getStringValue();
+    } else {
+      return expression.getFunctionCall().getOperands().get(1).getLiteral().getStringValue();
+    }
+  }
+
+  private Expression createMergedTextMatchExpression(Expression key, List<String> literals, boolean allNot, String operator) {
+    String mergedTextMatchFilter;
+    if (allNot) {
+      mergedTextMatchFilter = String.join(SPACE + (operator.equals(FilterKind.AND.name()) ? FilterKind.OR.name() : FilterKind.AND.name()) + SPACE, literals);
+    } else {
+      mergedTextMatchFilter = String.join(SPACE + operator + SPACE, literals);
+    }
+    return RequestUtils.getFunctionExpression(FilterKind.TEXT_MATCH.name(), key,
+        RequestUtils.getLiteralExpression("(" + mergedTextMatchFilter + ")"));
+  }
+//Refactoring end
 
     for (List<Expression> values : textMatchMap.values()) {
       if (values.size() > 1) {

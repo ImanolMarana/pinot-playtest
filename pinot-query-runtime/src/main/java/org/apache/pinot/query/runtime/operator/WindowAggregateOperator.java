@@ -271,72 +271,91 @@ public class WindowAggregateOperator extends MultiStageOperator {
   private TransferableBlock computeBlocks() throws ProcessingException {
     TransferableBlock block = _inputOperator.nextBlock();
     while (!TransferableBlockUtils.isEndOfStream(block)) {
-      List<Object[]> container = block.getContainer();
-      int containerSize = container.size();
-      if (_numRows + containerSize > _maxRowsInWindowCache) {
-        if (_windowOverflowMode == WindowOverFlowMode.THROW) {
-          ProcessingException resourceLimitExceededException =
-              new ProcessingException(QueryException.SERVER_RESOURCE_LIMIT_EXCEEDED_ERROR_CODE);
-          resourceLimitExceededException.setMessage(
-              "Cannot build in memory window cache for WINDOW operator, reach number of rows limit: "
-                  + _maxRowsInWindowCache);
-          throw resourceLimitExceededException;
-        } else {
-          // Just fill up the buffer.
-          int remainingRows = _maxRowsInWindowCache - _numRows;
-          container = container.subList(0, remainingRows);
-          _statMap.merge(StatKey.MAX_ROWS_IN_WINDOW_REACHED, true);
-          // setting the inputOperator to be early terminated and awaits EOS block next.
-          _inputOperator.earlyTerminate();
-        }
+      if (block.isErrorBlock()) {
+        return block;
       }
-      for (Object[] row : container) {
-        // TODO: Revisit null direction handling for all query types
-        Key key = AggregationUtils.extractRowKey(row, _groupSet);
-        _partitionRows.computeIfAbsent(key, k -> new ArrayList<>()).add(row);
-      }
-      _numRows += containerSize;
+      processInputBlock(block);
       block = _inputOperator.nextBlock();
     }
-    // Early termination if the block is an error block
-    if (block.isErrorBlock()) {
-      return block;
-    }
     _eosBlock = updateEosBlock(block, _statMap);
+
+    return buildOutputBlock();
+  }
+
+  private void processInputBlock(TransferableBlock block) throws ProcessingException {
+    List<Object[]> container = block.getContainer();
+    int containerSize = container.size();
+    if (_numRows + containerSize > _maxRowsInWindowCache) {
+      handleWindowOverflow(container);
+    } else {
+      addToPartitionRows(container);
+    }
+    _numRows += container.size();
+  }
+
+  private void handleWindowOverflow(List<Object[]> container) throws ProcessingException {
+    if (_windowOverflowMode == WindowOverFlowMode.THROW) {
+      throw new ProcessingException(QueryException.SERVER_RESOURCE_LIMIT_EXCEEDED_ERROR_CODE,
+          "Cannot build in memory window cache for WINDOW operator, reach number of rows limit: "
+              + _maxRowsInWindowCache);
+    } else {
+      // Just fill up the buffer.
+      container = container.subList(0, _maxRowsInWindowCache - _numRows);
+      _statMap.merge(StatKey.MAX_ROWS_IN_WINDOW_REACHED, true);
+      // setting the inputOperator to be early terminated and awaits EOS block next.
+      _inputOperator.earlyTerminate();
+    }
+  }
+
+  private void addToPartitionRows(List<Object[]> container) {
+    for (Object[] row : container) {
+      // TODO: Revisit null direction handling for all query types
+      Key key = AggregationUtils.extractRowKey(row, _groupSet);
+      _partitionRows.computeIfAbsent(key, k -> new ArrayList<>()).add(row);
+    }
+  }
+
+  private TransferableBlock buildOutputBlock() {
+    _hasReturnedWindowAggregateBlock = true;
+    if (_partitionRows.isEmpty()) {
+      return _eosBlock;
+    }
 
     ColumnDataType[] resultStoredTypes = _resultSchema.getStoredColumnDataTypes();
     List<Object[]> rows = new ArrayList<>(_numRows);
     for (Map.Entry<Key, List<Object[]>> e : _partitionRows.entrySet()) {
       List<Object[]> rowList = e.getValue();
-
-      // Each window function will return a list of results for each row in the input set
-      List<List<Object>> windowFunctionResults = new ArrayList<>();
-      for (WindowFunction windowFunction : _windowFunctions) {
-        List<Object> processRows = windowFunction.processRows(rowList);
-        assert processRows.size() == rowList.size();
-        windowFunctionResults.add(processRows);
-      }
-
-      for (int rowId = 0; rowId < rowList.size(); rowId++) {
-        Object[] existingRow = rowList.get(rowId);
-        Object[] row = new Object[existingRow.length + _aggCalls.size()];
-        System.arraycopy(existingRow, 0, row, 0, existingRow.length);
-        for (int i = 0; i < _windowFunctions.length; i++) {
-          row[i + existingRow.length] = windowFunctionResults.get(i).get(rowId);
-        }
-        // Convert the results from WindowFunction to the desired type
-        TypeUtils.convertRow(row, resultStoredTypes);
-        rows.add(row);
-      }
+      List<List<Object>> windowFunctionResults = computeWindowFunctionResults(rowList);
+      addResultsToRows(rows, rowList, windowFunctionResults, resultStoredTypes);
     }
+    return new TransferableBlock(rows, _resultSchema, DataBlock.Type.ROW);
+  }
 
-    _hasReturnedWindowAggregateBlock = true;
-    if (rows.isEmpty()) {
-      return _eosBlock;
-    } else {
-      return new TransferableBlock(rows, _resultSchema, DataBlock.Type.ROW);
+  private List<List<Object>> computeWindowFunctionResults(List<Object[]> rowList) {
+    List<List<Object>> windowFunctionResults = new ArrayList<>();
+    for (WindowFunction windowFunction : _windowFunctions) {
+      List<Object> processRows = windowFunction.processRows(rowList);
+      assert processRows.size() == rowList.size();
+      windowFunctionResults.add(processRows);
+    }
+    return windowFunctionResults;
+  }
+
+  private void addResultsToRows(List<Object[]> rows, List<Object[]> rowList,
+      List<List<Object>> windowFunctionResults, ColumnDataType[] resultStoredTypes) {
+    for (int rowId = 0; rowId < rowList.size(); rowId++) {
+      Object[] existingRow = rowList.get(rowId);
+      Object[] row = new Object[existingRow.length + _aggCalls.size()];
+      System.arraycopy(existingRow, 0, row, 0, existingRow.length);
+      for (int i = 0; i < _windowFunctions.length; i++) {
+        row[i + existingRow.length] = windowFunctionResults.get(i).get(rowId);
+      }
+      TypeUtils.convertRow(row, resultStoredTypes);
+      rows.add(row);
     }
   }
+
+//Refactoring end
 
   /**
    * Contains all the ORDER BY key related information such as the keys, direction, and null direction

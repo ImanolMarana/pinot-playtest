@@ -89,24 +89,31 @@ public class IndexConfigDeserializer {
       List<FieldConfig> fieldConfigList = tableConfig.getFieldConfigList();
       if (fieldConfigList != null) {
         for (FieldConfig fc : fieldConfigList) {
-          if (!fc.getIndexes().isObject()) {
-            continue;
-          }
-          JsonNode jsonNode = fc.getIndexes().get(fieldName);
-          if (jsonNode == null) {
-            continue;
-          }
-          C config;
-          try {
-            config = JsonUtils.jsonNodeToObject(jsonNode, aClass);
-          } catch (IOException e) {
-            throw new UncheckedIOException(e);
-          }
-          result.put(fc.getName(), config);
+          deserializeIndexConfig(fieldName, aClass, result, fc);
         }
       }
       return result;
     };
+  }
+
+  private static <C extends IndexConfig> void deserializeIndexConfig(String fieldName, Class<C> aClass,
+      Map<String, C> result, FieldConfig fc) {
+    if (!fc.getIndexes().isObject()) {
+      return;
+    }
+    JsonNode jsonNode = fc.getIndexes().get(fieldName);
+    if (jsonNode == null) {
+      return;
+    }
+    C config;
+    try {
+      config = JsonUtils.jsonNodeToObject(jsonNode, aClass);
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+    result.put(fc.getName(), config);
+  }
+//Refactoring end
   }
 
   public static <C extends IndexConfig> ColumnConfigDeserializer<C> fromIndexTypes(

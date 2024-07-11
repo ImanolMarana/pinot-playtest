@@ -266,25 +266,29 @@ public abstract class BaseServerStarter implements ServiceStartable {
     int realtimeConsumptionCatchupWaitMs =
         _serverConf.getProperty(Server.CONFIG_OF_STARTUP_REALTIME_CONSUMPTION_CATCHUP_WAIT_MS,
             Server.DEFAULT_STARTUP_REALTIME_CONSUMPTION_CATCHUP_WAIT_MS);
-    boolean isOffsetBasedConsumptionStatusCheckerEnabled =
-        _serverConf.getProperty(Server.CONFIG_OF_ENABLE_REALTIME_OFFSET_BASED_CONSUMPTION_STATUS_CHECKER,
-            Server.DEFAULT_ENABLE_REALTIME_OFFSET_BASED_CONSUMPTION_STATUS_CHECKER);
-    boolean isFreshnessStatusCheckerEnabled =
-        _serverConf.getProperty(Server.CONFIG_OF_ENABLE_REALTIME_FRESHNESS_BASED_CONSUMPTION_STATUS_CHECKER,
-            Server.DEFAULT_ENABLE_REALTIME_FRESHNESS_BASED_CONSUMPTION_STATUS_CHECKER);
-    int realtimeMinFreshnessMs = _serverConf.getProperty(Server.CONFIG_OF_STARTUP_REALTIME_MIN_FRESHNESS_MS,
-        Server.DEFAULT_STARTUP_REALTIME_MIN_FRESHNESS_MS);
 
-    // collect all resources which have this instance in the ideal state
+    List<String> resourcesToMonitor = collectResourcesToMonitor(realtimeConsumptionCatchupWaitMs);
+
+    ImmutableList.Builder<ServiceStatus.ServiceStatusCallback> serviceStatusCallbackListBuilder =
+        new ImmutableList.Builder<>();
+    serviceStatusCallbackListBuilder.add(
+        new ServiceStatus.IdealStateAndCurrentStateMatchServiceStatusCallback(_helixManager, _helixClusterName,
+            _instanceId, resourcesToMonitor, minResourcePercentForStartup));
+    serviceStatusCallbackListBuilder.add(
+        new ServiceStatus.IdealStateAndExternalViewMatchServiceStatusCallback(_helixManager, _helixClusterName,
+            _instanceId, resourcesToMonitor, minResourcePercentForStartup));
+
+    addRealtimeConsumptionCatchupCallbackIfNeeded(realtimeConsumptionCatchupWaitMs,
+        serviceStatusCallbackListBuilder);
+
+    LOGGER.info("Registering service status handler");
+    ServiceStatus.setServiceStatusCallback(_instanceId,
+        new ServiceStatus.MultipleCallbackServiceStatusCallback(serviceStatusCallbackListBuilder.build()));
+  }
+
+  private List<String> collectResourcesToMonitor(int realtimeConsumptionCatchupWaitMs) {
     List<String> resourcesToMonitor = new ArrayList<>();
-    Map<String, Set<String>> consumingSegments = new HashMap<>();
     boolean checkRealtime = realtimeConsumptionCatchupWaitMs > 0;
-    if (isFreshnessStatusCheckerEnabled && realtimeMinFreshnessMs <= 0) {
-      LOGGER.warn("Realtime min freshness {} must be > 0. Setting relatime min freshness to default {}.",
-          realtimeMinFreshnessMs, Server.DEFAULT_STARTUP_REALTIME_MIN_FRESHNESS_MS);
-      realtimeMinFreshnessMs = Server.DEFAULT_STARTUP_REALTIME_MIN_FRESHNESS_MS;
-    }
-
     for (String resourceName : _helixAdmin.getResourcesInCluster(_helixClusterName)) {
       // Only monitor table resources
       if (!TableNameBuilder.isTableResource(resourceName)) {
@@ -295,87 +299,102 @@ public abstract class BaseServerStarter implements ServiceStartable {
       if (idealState == null || !idealState.isEnabled()) {
         continue;
       }
-      for (String partitionName : idealState.getPartitionSet()) {
-        if (idealState.getInstanceSet(partitionName).contains(_instanceId)) {
-          resourcesToMonitor.add(resourceName);
-          break;
-        }
+      if (isInstanceInIdealState(idealState, resourceName)) {
+        resourcesToMonitor.add(resourceName);
       }
       if (checkRealtime && TableNameBuilder.isRealtimeTableResource(resourceName)) {
-        for (String partitionName : idealState.getPartitionSet()) {
-          if (StateModel.SegmentStateModel.CONSUMING.equals(
-              idealState.getInstanceStateMap(partitionName).get(_instanceId))) {
-            consumingSegments.computeIfAbsent(resourceName, k -> new HashSet<>()).add(partitionName);
-          }
-        }
+        collectConsumingSegments(idealState, resourceName);
       }
     }
-
-    ImmutableList.Builder<ServiceStatus.ServiceStatusCallback> serviceStatusCallbackListBuilder =
-        new ImmutableList.Builder<>();
-    serviceStatusCallbackListBuilder.add(
-        new ServiceStatus.IdealStateAndCurrentStateMatchServiceStatusCallback(_helixManager, _helixClusterName,
-            _instanceId, resourcesToMonitor, minResourcePercentForStartup));
-    serviceStatusCallbackListBuilder.add(
-        new ServiceStatus.IdealStateAndExternalViewMatchServiceStatusCallback(_helixManager, _helixClusterName,
-            _instanceId, resourcesToMonitor, minResourcePercentForStartup));
-    boolean foundConsuming = !consumingSegments.isEmpty();
-    if (checkRealtime && foundConsuming) {
-      // We specifically put the freshness based checker first to ensure it's the only one setup if both checkers
-      // are accidentally enabled together. The freshness based checker is a stricter version of the offset based
-      // checker. But in the end, both checkers are bounded in time by realtimeConsumptionCatchupWaitMs.
-      if (isFreshnessStatusCheckerEnabled) {
-        int idleTimeoutMs = _serverConf.getProperty(Server.CONFIG_OF_REALTIME_FRESHNESS_IDLE_TIMEOUT_MS,
-            Server.DEFAULT_REALTIME_FRESHNESS_IDLE_TIMEOUT_MS);
-
-        LOGGER.info("Setting up freshness based status checker with min freshness {} and idle timeout {}",
-            realtimeMinFreshnessMs, idleTimeoutMs);
-        FreshnessBasedConsumptionStatusChecker freshnessStatusChecker =
-            new FreshnessBasedConsumptionStatusChecker(_serverInstance.getInstanceDataManager(), consumingSegments,
-                this::getConsumingSegments, realtimeMinFreshnessMs, idleTimeoutMs);
-        Supplier<Integer> getNumConsumingSegmentsNotReachedMinFreshness =
-            freshnessStatusChecker::getNumConsumingSegmentsNotReachedIngestionCriteria;
-        serviceStatusCallbackListBuilder.add(
-            new ServiceStatus.RealtimeConsumptionCatchupServiceStatusCallback(_helixManager, _helixClusterName,
-                _instanceId, realtimeConsumptionCatchupWaitMs, getNumConsumingSegmentsNotReachedMinFreshness));
-      } else if (isOffsetBasedConsumptionStatusCheckerEnabled) {
-        LOGGER.info("Setting up offset based status checker");
-        OffsetBasedConsumptionStatusChecker consumptionStatusChecker =
-            new OffsetBasedConsumptionStatusChecker(_serverInstance.getInstanceDataManager(), consumingSegments,
-                this::getConsumingSegments);
-        Supplier<Integer> getNumConsumingSegmentsNotReachedTheirLatestOffset =
-            consumptionStatusChecker::getNumConsumingSegmentsNotReachedIngestionCriteria;
-        serviceStatusCallbackListBuilder.add(
-            new ServiceStatus.RealtimeConsumptionCatchupServiceStatusCallback(_helixManager, _helixClusterName,
-                _instanceId, realtimeConsumptionCatchupWaitMs, getNumConsumingSegmentsNotReachedTheirLatestOffset));
-      } else {
-        LOGGER.info("Setting up static time based status checker");
-        serviceStatusCallbackListBuilder.add(
-            new ServiceStatus.RealtimeConsumptionCatchupServiceStatusCallback(_helixManager, _helixClusterName,
-                _instanceId, realtimeConsumptionCatchupWaitMs, null));
-      }
-    }
-    LOGGER.info("Registering service status handler");
-    ServiceStatus.setServiceStatusCallback(_instanceId,
-        new ServiceStatus.MultipleCallbackServiceStatusCallback(serviceStatusCallbackListBuilder.build()));
+    return resourcesToMonitor;
   }
 
-  @Nullable
-  private Set<String> getConsumingSegments(String realtimeTableName) {
-    IdealState idealState = _helixAdmin.getResourceIdealState(_helixClusterName, realtimeTableName);
-    if (idealState == null || !idealState.isEnabled()) {
-      return null;
+  private boolean isInstanceInIdealState(IdealState idealState, String resourceName) {
+    for (String partitionName : idealState.getPartitionSet()) {
+      if (idealState.getInstanceSet(partitionName).contains(_instanceId)) {
+        return true;
+      }
     }
-    Set<String> consumingSegments = new HashSet<>();
+    return false;
+  }
+
+  private void collectConsumingSegments(IdealState idealState, String resourceName) {
     for (String partitionName : idealState.getPartitionSet()) {
       if (StateModel.SegmentStateModel.CONSUMING.equals(
           idealState.getInstanceStateMap(partitionName).get(_instanceId))) {
-        consumingSegments.add(partitionName);
+        _consumingSegments.computeIfAbsent(resourceName, k -> new HashSet<>()).add(partitionName);
       }
     }
-    return consumingSegments;
   }
 
+  private void addRealtimeConsumptionCatchupCallbackIfNeeded(int realtimeConsumptionCatchupWaitMs,
+      ImmutableList.Builder<ServiceStatus.ServiceStatusCallback> serviceStatusCallbackListBuilder) {
+    boolean foundConsuming = !_consumingSegments.isEmpty();
+    if (realtimeConsumptionCatchupWaitMs > 0 && foundConsuming) {
+      int realtimeMinFreshnessMs = _serverConf.getProperty(Server.CONFIG_OF_STARTUP_REALTIME_MIN_FRESHNESS_MS,
+          Server.DEFAULT_STARTUP_REALTIME_MIN_FRESHNESS_MS);
+      boolean isOffsetBasedConsumptionStatusCheckerEnabled =
+          _serverConf.getProperty(Server.CONFIG_OF_ENABLE_REALTIME_OFFSET_BASED_CONSUMPTION_STATUS_CHECKER,
+              Server.DEFAULT_ENABLE_REALTIME_OFFSET_BASED_CONSUMPTION_STATUS_CHECKER);
+      boolean isFreshnessStatusCheckerEnabled =
+          _serverConf.getProperty(Server.CONFIG_OF_ENABLE_REALTIME_FRESHNESS_BASED_CONSUMPTION_STATUS_CHECKER,
+              Server.DEFAULT_ENABLE_REALTIME_FRESHNESS_BASED_CONSUMPTION_STATUS_CHECKER);
+
+      if (isFreshnessStatusCheckerEnabled) {
+        addFreshnessBasedConsumptionStatusChecker(realtimeConsumptionCatchupWaitMs,
+            realtimeMinFreshnessMs, serviceStatusCallbackListBuilder);
+      } else if (isOffsetBasedConsumptionStatusCheckerEnabled) {
+        addOffsetBasedConsumptionStatusChecker(realtimeConsumptionCatchupWaitMs,
+            serviceStatusCallbackListBuilder);
+      } else {
+        addStaticTimeBasedConsumptionStatusChecker(realtimeConsumptionCatchupWaitMs,
+            serviceStatusCallbackListBuilder);
+      }
+    }
+  }
+
+  private void addFreshnessBasedConsumptionStatusChecker(int realtimeConsumptionCatchupWaitMs,
+      int realtimeMinFreshnessMs,
+      ImmutableList.Builder<ServiceStatus.ServiceStatusCallback> serviceStatusCallbackListBuilder) {
+    int idleTimeoutMs = _serverConf.getProperty(Server.CONFIG_OF_REALTIME_FRESHNESS_IDLE_TIMEOUT_MS,
+        Server.DEFAULT_REALTIME_FRESHNESS_IDLE_TIMEOUT_MS);
+
+    LOGGER.info("Setting up freshness based status checker with min freshness {} and idle timeout {}",
+        realtimeMinFreshnessMs, idleTimeoutMs);
+    FreshnessBasedConsumptionStatusChecker freshnessStatusChecker =
+        new FreshnessBasedConsumptionStatusChecker(_serverInstance.getInstanceDataManager(), _consumingSegments,
+            this::getConsumingSegments, realtimeMinFreshnessMs, idleTimeoutMs);
+    Supplier<Integer> getNumConsumingSegmentsNotReachedMinFreshness =
+        freshnessStatusChecker::getNumConsumingSegmentsNotReachedIngestionCriteria;
+    serviceStatusCallbackListBuilder.add(
+        new ServiceStatus.RealtimeConsumptionCatchupServiceStatusCallback(_helixManager, _helixClusterName,
+            _instanceId, realtimeConsumptionCatchupWaitMs, getNumConsumingSegmentsNotReachedMinFreshness));
+  }
+
+  private void addOffsetBasedConsumptionStatusChecker(int realtimeConsumptionCatchupWaitMs,
+      ImmutableList.Builder<ServiceStatus.ServiceStatusCallback> serviceStatusCallbackListBuilder) {
+    LOGGER.info("Setting up offset based status checker");
+    OffsetBasedConsumptionStatusChecker consumptionStatusChecker =
+        new OffsetBasedConsumptionStatusChecker(_serverInstance.getInstanceDataManager(), _consumingSegments,
+            this::getConsumingSegments);
+    Supplier<Integer> getNumConsumingSegmentsNotReachedTheirLatestOffset =
+        consumptionStatusChecker::getNumConsumingSegmentsNotReachedIngestionCriteria;
+    serviceStatusCallbackListBuilder.add(
+        new ServiceStatus.RealtimeConsumptionCatchupServiceStatusCallback(_helixManager, _helixClusterName,
+            _instanceId, realtimeConsumptionCatchupWaitMs, getNumConsumingSegmentsNotReachedTheirLatestOffset));
+  }
+
+  private void addStaticTimeBasedConsumptionStatusChecker(int realtimeConsumptionCatchupWaitMs,
+      ImmutableList.Builder<ServiceStatus.ServiceStatusCallback> serviceStatusCallbackListBuilder) {
+    LOGGER.info("Setting up static time based status checker");
+    serviceStatusCallbackListBuilder.add(
+        new ServiceStatus.RealtimeConsumptionCatchupServiceStatusCallback(_helixManager, _helixClusterName,
+            _instanceId, realtimeConsumptionCatchupWaitMs, null));
+  }
+
+  private Map<String, Set<String>> _consumingSegments = new HashMap<>();
+
+//Refactoring end
   private void updateInstanceConfigIfNeeded(ServerConf serverConf) {
     InstanceConfig instanceConfig = HelixHelper.getInstanceConfig(_helixManager, _instanceId);
 

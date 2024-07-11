@@ -52,40 +52,59 @@ public class DivisionTransformFunction extends BaseTransformFunction {
       throw new IllegalArgumentException("Exactly 2 arguments are required for DIV transform function");
     }
 
-    _resultDataType = DataType.DOUBLE;
+    _resultDataType = determineResultDataType(arguments);
+    initializeLiterals(_resultDataType);
+
+    for (int i = 0; i < arguments.size(); i++) {
+      processArgument(arguments.get(i), i);
+    }
+  }
+
+  private DataType determineResultDataType(List<TransformFunction> arguments) {
     for (TransformFunction argument : arguments) {
       if (argument.getResultMetadata().getDataType() == DataType.BIG_DECIMAL) {
-        _resultDataType = DataType.BIG_DECIMAL;
-        break;
+        return DataType.BIG_DECIMAL;
       }
     }
-    if (_resultDataType == DataType.BIG_DECIMAL) {
+    return DataType.DOUBLE;
+  }
+
+  private void initializeLiterals(DataType resultDataType) {
+    if (resultDataType == DataType.BIG_DECIMAL) {
       _bigDecimalLiterals = new BigDecimal[2];
     } else {
       _doubleLiterals = new double[2];
     }
+  }
 
-    for (int i = 0; i < arguments.size(); i++) {
-      TransformFunction argument = arguments.get(i);
-      if (argument instanceof LiteralTransformFunction) {
-        LiteralTransformFunction literalTransformFunction = (LiteralTransformFunction) argument;
-        if (_resultDataType == DataType.BIG_DECIMAL) {
-          _bigDecimalLiterals[i] = literalTransformFunction.getBigDecimalLiteral();
-        } else {
-          _doubleLiterals[i] = ((LiteralTransformFunction) argument).getDoubleLiteral();
-        }
-      } else {
-        if (!argument.getResultMetadata().isSingleValue()) {
-          throw new IllegalArgumentException("every argument of DIV transform function must be single-valued");
-        }
-        if (i == 0) {
-          _firstTransformFunction = argument;
-        } else {
-          _secondTransformFunction = argument;
-        }
-      }
+  private void processArgument(TransformFunction argument, int index) {
+    if (argument instanceof LiteralTransformFunction) {
+      processLiteralArgument((LiteralTransformFunction) argument, index);
+    } else {
+      processNonLiteralArgument(argument, index);
     }
   }
+
+  private void processLiteralArgument(LiteralTransformFunction literalTransformFunction, int index) {
+    if (_resultDataType == DataType.BIG_DECIMAL) {
+      _bigDecimalLiterals[index] = literalTransformFunction.getBigDecimalLiteral();
+    } else {
+      _doubleLiterals[index] = literalTransformFunction.getDoubleLiteral();
+    }
+  }
+
+  private void processNonLiteralArgument(TransformFunction argument, int index) {
+    if (!argument.getResultMetadata().isSingleValue()) {
+      throw new IllegalArgumentException("every argument of DIV transform function must be single-valued");
+    }
+    if (index == 0) {
+      _firstTransformFunction = argument;
+    } else {
+      _secondTransformFunction = argument;
+    }
+  }
+
+//Refactoring end
 
   @Override
   public TransformResultMetadata getResultMetadata() {

@@ -87,9 +87,14 @@ public class ParentAggregationResultRewriter implements ResultRewriter {
       childFunctionMapping = createChildFunctionMapping(dataSchema, rows.get(0));
     }
 
+    return generateRewrittenResult(dataSchema, numParentAggregationFunctions, childFunctionMapping, rows);
+  }
+
+  private RewriterResult generateRewrittenResult(DataSchema dataSchema, int numParentAggregationFunctions,
+      Map<String, ChildFunctionMapping> childFunctionMapping, List<Object[]> rows) {
     String[] newColumnNames = new String[dataSchema.size() - numParentAggregationFunctions];
-    DataSchema.ColumnDataType[] newColumnDataTypes
-        = new DataSchema.ColumnDataType[dataSchema.size() - numParentAggregationFunctions];
+    DataSchema.ColumnDataType[] newColumnDataTypes =
+        new DataSchema.ColumnDataType[dataSchema.size() - numParentAggregationFunctions];
 
     // Create a mapping from the function offset in the final aggregation result
     // to its own/parent function offset in the original aggregation result
@@ -102,46 +107,9 @@ public class ParentAggregationResultRewriter implements ResultRewriter {
     // Create a set of the result indices of the parent aggregation functions
     Set<Integer> parentAggregationFunctionIndices = new HashSet<>();
 
-    for (int i = 0, j = 0; i < dataSchema.size(); i++) {
-      String columnName = dataSchema.getColumnName(i);
-      // Skip the parent aggregation functions
-      if (columnName.startsWith(CommonConstants.RewriterConstants.PARENT_AGGREGATION_NAME_PREFIX)) {
-        parentAggregationFunctionIndices.add(i);
-        continue;
-      }
-
-      // for child aggregation functions and regular columns in the result
-      // create a new schema and populate the new column names and data types
-      // also populate the offset mappings used to rewrite the result
-      if (columnName.startsWith(CommonConstants.RewriterConstants.CHILD_AGGREGATION_NAME_PREFIX)) {
-        // This is a child column of a parent aggregation function
-        String childAggregationFunctionNameWithKey =
-            columnName.substring(CommonConstants.RewriterConstants.CHILD_AGGREGATION_NAME_PREFIX.length());
-        String[] s = childAggregationFunctionNameWithKey
-            .split(CommonConstants.RewriterConstants.CHILD_AGGREGATION_SEPERATOR);
-        newColumnNames[j] = s[0];
-
-        if (childFunctionMapping == null) {
-          newColumnDataTypes[j] = DataSchema.ColumnDataType.STRING;
-          j++;
-          continue;
-        }
-        ChildFunctionMapping childFunction = childFunctionMapping.get(s[1]);
-        newColumnDataTypes[j] = childFunction.getParent().getSchema()
-            .getColumnDataType(childFunction.getNestedOffset());
-
-        childAggregationFunctionNestedIndexMapping.put(j, childFunction.getNestedOffset());
-        childAggregationFunctionIndices.add(j);
-        aggregationFunctionIndexMapping.put(j, childFunction.getOffset());
-      } else {
-        // This is a regular column
-        newColumnNames[j] = columnName;
-        newColumnDataTypes[j] = dataSchema.getColumnDataType(i);
-
-        aggregationFunctionIndexMapping.put(j, i);
-      }
-      j++;
-    }
+    populateMappingStructures(dataSchema, childFunctionMapping, newColumnNames, newColumnDataTypes,
+        aggregationFunctionIndexMapping, childAggregationFunctionIndices,
+        childAggregationFunctionNestedIndexMapping, parentAggregationFunctionIndices);
 
     DataSchema newDataSchema = new DataSchema(newColumnNames, newColumnDataTypes);
     List<Object[]> newRows = new ArrayList<>();
@@ -157,29 +125,138 @@ public class ParentAggregationResultRewriter implements ResultRewriter {
       List<Object[]> newRowsBuffer = new ArrayList<>();
       for (int rowIter = 0; rowIter < maxRows; rowIter++) {
         Object[] newRow = new Object[newDataSchema.size()];
-        for (int fieldIter = 0; fieldIter < newDataSchema.size(); fieldIter++) {
-          // If the field is a child aggregation function, extract the value from the parent result
-          if (childAggregationFunctionIndices.contains(fieldIter)) {
-            int offset = aggregationFunctionIndexMapping.get(fieldIter);
-            int nestedOffset = childAggregationFunctionNestedIndexMapping.get(fieldIter);
-            ParentAggregationFunctionResultObject parentAggregationFunctionResultObject =
-                (ParentAggregationFunctionResultObject) row[offset];
-            // If the parent result has more rows than the current row, extract the value from the row
-            if (rowIter < parentAggregationFunctionResultObject.getNumberOfRows()) {
-              newRow[fieldIter] = parentAggregationFunctionResultObject.getField(rowIter, nestedOffset);
-            } else {
-              newRow[fieldIter] = null;
-            }
-          } else { // If the field is a regular column, extract the value from the row, only the first row has value
-            newRow[fieldIter] = row[aggregationFunctionIndexMapping.get(fieldIter)];
-          }
-        }
+        populateNewRow(newDataSchema, childAggregationFunctionIndices, aggregationFunctionIndexMapping,
+            childAggregationFunctionNestedIndexMapping, row, rowIter, newRow);
         newRowsBuffer.add(newRow);
       }
       newRows.addAll(newRowsBuffer);
     }
     return new RewriterResult(newDataSchema, newRows);
   }
+
+  private void populateNewRow(DataSchema newDataSchema, Set<Integer> childAggregationFunctionIndices,
+      Map<Integer, Integer> aggregationFunctionIndexMapping,
+      Map<Integer, Integer> childAggregationFunctionNestedIndexMapping, Object[] row, int rowIter,
+      Object[] newRow) {
+    for (int fieldIter = 0; fieldIter < newDataSchema.size(); fieldIter++) {
+      // If the field is a child aggregation function, extract the value from the parent result
+      if (childAggregationFunctionIndices.contains(fieldIter)) {
+        int offset = aggregationFunctionIndexMapping.get(fieldIter);
+        int nestedOffset = childAggregationFunctionNestedIndexMapping.get(fieldIter);
+        ParentAggregationFunctionResultObject parentAggregationFunctionResultObject =
+            (ParentAggregationFunctionResultObject) row[offset];
+        // If the parent result has more rows than the current row, extract the value from the row
+        if (rowIter < parentAggregationFunctionResultObject.getNumberOfRows()) {
+          newRow[fieldIter] = parentAggregationFunctionResultObject.getField(rowIter, nestedOffset);
+        } else {
+          newRow[fieldIter] = null;
+        }
+      } else { // If the field is a regular column, extract the value from the row, only the first row has value
+        newRow[fieldIter] = row[aggregationFunctionIndexMapping.get(fieldIter)];
+      }
+    }
+  }
+
+  private void populateMappingStructures(DataSchema dataSchema,
+      Map<String, ChildFunctionMapping> childFunctionMapping, String[] newColumnNames,
+      DataSchema.ColumnDataType[] newColumnDataTypes, Map<Integer, Integer> aggregationFunctionIndexMapping,
+      Set<Integer> childAggregationFunctionIndices,
+      Map<Integer, Integer> childAggregationFunctionNestedIndexMapping,
+      Set<Integer> parentAggregationFunctionIndices) {
+    for (int i = 0, j = 0; i < dataSchema.size(); i++) {
+      String columnName = dataSchema.getColumnName(i);
+      // Skip the parent aggregation functions
+      if (columnName.startsWith(CommonConstants.RewriterConstants.PARENT_AGGREGATION_NAME_PREFIX)) {
+        parentAggregationFunctionIndices.add(i);
+        continue;
+      }
+
+      // for child aggregation functions and regular columns in the result
+      // create a new schema and populate the new column names and data types
+      // also populate the offset mappings used to rewrite the result
+      if (columnName.startsWith(CommonConstants.RewriterConstants.CHILD_AGGREGATION_NAME_PREFIX)) {
+        // This is a child column of a parent aggregation function
+        handleChildAggregationColumn(childFunctionMapping, newColumnNames, newColumnDataTypes,
+            aggregationFunctionIndexMapping, childAggregationFunctionIndices,
+            childAggregationFunctionNestedIndexMapping, j, columnName);
+      } else {
+        // This is a regular column
+        newColumnNames[j] = columnName;
+        newColumnDataTypes[j] = dataSchema.getColumnDataType(i);
+
+        aggregationFunctionIndexMapping.put(j, i);
+      }
+      j++;
+    }
+  }
+
+  private void handleChildAggregationColumn(Map<String, ChildFunctionMapping> childFunctionMapping,
+      String[] newColumnNames, DataSchema.ColumnDataType[] newColumnDataTypes,
+      Map<Integer, Integer> aggregationFunctionIndexMapping, Set<Integer> childAggregationFunctionIndices,
+      Map<Integer, Integer> childAggregationFunctionNestedIndexMapping, int j, String columnName) {
+    String childAggregationFunctionNameWithKey =
+        columnName.substring(CommonConstants.RewriterConstants.CHILD_AGGREGATION_NAME_PREFIX.length());
+    String[] s =
+        childAggregationFunctionNameWithKey.split(CommonConstants.RewriterConstants.CHILD_AGGREGATION_SEPERATOR);
+    newColumnNames[j] = s[0];
+
+    if (childFunctionMapping == null) {
+      newColumnDataTypes[j] = DataSchema.ColumnDataType.STRING;
+      return;
+    }
+    ChildFunctionMapping childFunction = childFunctionMapping.get(s[1]);
+    newColumnDataTypes[j] = childFunction.getParent().getSchema().getColumnDataType(childFunction.getNestedOffset());
+
+    childAggregationFunctionNestedIndexMapping.put(j, childFunction.getNestedOffset());
+    childAggregationFunctionIndices.add(j);
+    aggregationFunctionIndexMapping.put(j, childFunction.getOffset());
+  }
+
+  private static Map<String, ChildFunctionMapping> createChildFunctionMapping(DataSchema schema, Object[] row) {
+    Map<String, ChildFunctionMapping> childFunctionMapping = new HashMap<>();
+    for (int i = 0; i < schema.size(); i++) {
+      String columnName = schema.getColumnName(i);
+      if (columnName.startsWith(CommonConstants.RewriterConstants.PARENT_AGGREGATION_NAME_PREFIX)) {
+        ParentAggregationFunctionResultObject parent = (ParentAggregationFunctionResultObject) row[i];
+
+        DataSchema nestedSchema = parent.getSchema();
+        for (int j = 0; j < nestedSchema.size(); j++) {
+          String childColumnKey = nestedSchema.getColumnName(j);
+          String originalChildFunctionKey =
+              columnName.substring(CommonConstants.RewriterConstants.PARENT_AGGREGATION_NAME_PREFIX.length())
+                  + CommonConstants.RewriterConstants.CHILD_KEY_SEPERATOR + childColumnKey;
+          // aggregationFunctionType + childFunctionID + CHILD_KEY_SEPERATOR + childFunctionKeyInParent
+          childFunctionMapping.put(originalChildFunctionKey, new ChildFunctionMapping(parent, j, i));
+        }
+      }
+    }
+    return childFunctionMapping;
+  }
+
+  private static class ChildFunctionMapping {
+    private final ParentAggregationFunctionResultObject _parent;
+    private final int _nestedOffset;
+    private final int _offset;
+
+    public ChildFunctionMapping(ParentAggregationFunctionResultObject parent, int nestedOffset, int offset) {
+      _parent = parent;
+      _nestedOffset = nestedOffset;
+      _offset = offset;
+    }
+
+    public int getOffset() {
+      return _offset;
+    }
+
+    public ParentAggregationFunctionResultObject getParent() {
+      return _parent;
+    }
+
+    public int getNestedOffset() {
+      return _nestedOffset;
+    }
+  }
+//Refactoring end
 
   /**
    * Mapping from child function key to

@@ -430,48 +430,63 @@ public abstract class BaseBrokerStarter implements ServiceStartable {
     if (_tlsPort > 0) {
       HelixHelper.updateTlsPort(instanceConfig, _tlsPort);
     }
-    // Update multi-stage query engine ports
-    if (_brokerConf.getProperty(Helix.CONFIG_OF_MULTI_STAGE_ENGINE_ENABLED, Helix.DEFAULT_MULTI_STAGE_ENGINE_ENABLED)) {
-      updated |= updatePortIfNeeded(simpleFields, Helix.Instance.MULTI_STAGE_QUERY_ENGINE_MAILBOX_PORT_KEY,
-          Integer.parseInt(_brokerConf.getProperty(MultiStageQueryRunner.KEY_OF_QUERY_RUNNER_PORT)));
-    } else {
-      updated |= updatePortIfNeeded(simpleFields, Helix.Instance.MULTI_STAGE_QUERY_ENGINE_MAILBOX_PORT_KEY, -1);
-    }
+    updated |= updateMultiStageQueryEnginePortsIfNeeded(simpleFields);
     updated |= HelixHelper.removeDisabledPartitions(instanceConfig);
-    boolean shouldUpdateBrokerResource = false;
-    List<String> instanceTags = instanceConfig.getTags();
-    if (instanceTags.isEmpty()) {
-      // This is a new broker (first time joining the cluster)
-      if (ZKMetadataProvider.getClusterTenantIsolationEnabled(_propertyStore)) {
-        instanceConfig.addTag(TagNameUtils.getBrokerTagForTenant(null));
-        shouldUpdateBrokerResource = true;
-      } else {
-        String instanceTagsConfig = _brokerConf.getProperty(Broker.CONFIG_OF_BROKER_INSTANCE_TAGS);
-        if (StringUtils.isNotEmpty(instanceTagsConfig)) {
-          for (String instanceTag : StringUtils.split(instanceTagsConfig, ',')) {
-            Preconditions.checkArgument(TagNameUtils.isBrokerTag(instanceTag), "Illegal broker instance tag: %s",
-                instanceTag);
-            instanceConfig.addTag(instanceTag);
-          }
-          shouldUpdateBrokerResource = true;
-        } else {
-          instanceConfig.addTag(Helix.UNTAGGED_BROKER_INSTANCE);
-        }
-      }
-      instanceTags = instanceConfig.getTags();
-      updated = true;
-    }
+    boolean shouldUpdateBrokerResource = updateInstanceTagsIfNeeded(instanceConfig);
+
     if (updated) {
       HelixHelper.updateInstanceConfig(_participantHelixManager, instanceConfig);
     }
     if (shouldUpdateBrokerResource) {
-      // Update broker resource to include the new broker
-      long startTimeMs = System.currentTimeMillis();
-      List<String> tablesAdded = new ArrayList<>();
-      HelixHelper.updateBrokerResource(_participantHelixManager, _instanceId, instanceTags, tablesAdded, null);
-      LOGGER.info("Updated broker resource for new joining broker: {} with instance tags: {} in {}ms, tables added: {}",
-          _instanceId, instanceTags, System.currentTimeMillis() - startTimeMs, tablesAdded);
+      updateBrokerResource(instanceConfig.getTags());
     }
+  }
+
+  private boolean updateMultiStageQueryEnginePortsIfNeeded(Map<String, String> simpleFields) {
+    if (_brokerConf.getProperty(Helix.CONFIG_OF_MULTI_STAGE_ENGINE_ENABLED,
+        Helix.DEFAULT_MULTI_STAGE_ENGINE_ENABLED)) {
+      return updatePortIfNeeded(simpleFields, Helix.Instance.MULTI_STAGE_QUERY_ENGINE_MAILBOX_PORT_KEY,
+          Integer.parseInt(_brokerConf.getProperty(MultiStageQueryRunner.KEY_OF_QUERY_RUNNER_PORT)));
+    } else {
+      return updatePortIfNeeded(simpleFields, Helix.Instance.MULTI_STAGE_QUERY_ENGINE_MAILBOX_PORT_KEY, -1);
+    }
+  }
+
+  private boolean updateInstanceTagsIfNeeded(InstanceConfig instanceConfig) {
+    List<String> instanceTags = instanceConfig.getTags();
+    if (!instanceTags.isEmpty()) {
+      return false;
+    }
+    // This is a new broker (first time joining the cluster)
+    if (ZKMetadataProvider.getClusterTenantIsolationEnabled(_propertyStore)) {
+      instanceConfig.addTag(TagNameUtils.getBrokerTagForTenant(null));
+      return true;
+    }
+    String instanceTagsConfig = _brokerConf.getProperty(Broker.CONFIG_OF_BROKER_INSTANCE_TAGS);
+    if (StringUtils.isNotEmpty(instanceTagsConfig)) {
+      for (String instanceTag : StringUtils.split(instanceTagsConfig, ',')) {
+        Preconditions.checkArgument(TagNameUtils.isBrokerTag(instanceTag), "Illegal broker instance tag: %s",
+            instanceTag);
+        instanceConfig.addTag(instanceTag);
+      }
+      return true;
+    } else {
+      instanceConfig.addTag(Helix.UNTAGGED_BROKER_INSTANCE);
+      return true;
+    }
+  }
+
+  private void updateBrokerResource(List<String> instanceTags) {
+    // Update broker resource to include the new broker
+    long startTimeMs = System.currentTimeMillis();
+    List<String> tablesAdded = new ArrayList<>();
+    HelixHelper.updateBrokerResource(_participantHelixManager, _instanceId, instanceTags, tablesAdded, null);
+    LOGGER.info(
+        "Updated broker resource for new joining broker: {} with instance tags: {} in {}ms, tables added: {}",
+        _instanceId, instanceTags, System.currentTimeMillis() - startTimeMs, tablesAdded);
+  }
+
+//Refactoring end
   }
 
   /**

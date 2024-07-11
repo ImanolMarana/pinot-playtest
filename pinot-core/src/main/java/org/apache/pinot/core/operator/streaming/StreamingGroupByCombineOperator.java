@@ -153,76 +153,99 @@ public class StreamingGroupByCombineOperator extends BaseStreamingCombineOperato
   public void processSegments() {
     int operatorId;
     while (_processingException.get() == null && (operatorId = _nextOperatorId.getAndIncrement()) < _numOperators) {
-      Operator operator = _operators.get(operatorId);
-      try {
-        if (operator instanceof AcquireReleaseColumnsSegmentOperator) {
-          ((AcquireReleaseColumnsSegmentOperator) operator).acquire();
-        }
-        GroupByResultsBlock resultsBlock = (GroupByResultsBlock) operator.nextBlock();
+      processSegment(operatorId);
+    }
+  }
+
+  private void processSegment(int operatorId) {
+    Operator operator = _operators.get(operatorId);
+    try {
+      if (operator instanceof AcquireReleaseColumnsSegmentOperator) {
+        ((AcquireReleaseColumnsSegmentOperator) operator).acquire();
+      }
+      GroupByResultsBlock resultsBlock = (GroupByResultsBlock) operator.nextBlock();
+      initializeIndexedTableIfNeeded(resultsBlock);
+      updateNumGroupsLimitReachedFlag(resultsBlock);
+      mergeResults(resultsBlock);
+    } finally {
+      releaseOperatorIfNecessary(operator);
+    }
+  }
+
+  private void releaseOperatorIfNecessary(Operator operator) {
+    if (operator instanceof AcquireReleaseColumnsSegmentOperator) {
+      ((AcquireReleaseColumnsSegmentOperator) operator).release();
+    }
+  }
+
+  private void mergeResults(GroupByResultsBlock resultsBlock) {
+    if (resultsBlock.getIntermediateRecords() != null) {
+      mergeIntermediateRecords(resultsBlock);
+    } else {
+      mergeAggregationGroupByResult(resultsBlock);
+    }
+  }
+
+  private void mergeAggregationGroupByResult(GroupByResultsBlock resultsBlock) {
+    AggregationGroupByResult aggregationGroupByResult = resultsBlock.getAggregationGroupByResult();
+    if (aggregationGroupByResult != null) {
+      int mergedKeys = 0;
+      Iterator<GroupKeyGenerator.GroupKey> dicGroupKeyIterator = aggregationGroupByResult.getGroupKeyIterator();
+      while (dicGroupKeyIterator.hasNext()) {
+        mergeGroupKey(aggregationGroupByResult, dicGroupKeyIterator, mergedKeys);
+        mergedKeys++;
+      }
+    }
+  }
+
+  private void mergeGroupKey(AggregationGroupByResult aggregationGroupByResult,
+      Iterator<GroupKeyGenerator.GroupKey> dicGroupKeyIterator, int mergedKeys) {
+    GroupKeyGenerator.GroupKey groupKey = dicGroupKeyIterator.next();
+    Object[] keys = groupKey._keys;
+    Object[] values = Arrays.copyOf(keys, _numColumns);
+    int groupId = groupKey._groupId;
+    for (int i = 0; i < _numAggregationFunctions; i++) {
+      values[_numGroupByExpressions + i] = aggregationGroupByResult.getResultForGroupId(i, groupId);
+    }
+    _indexedTable.upsert(new Key(keys), new Record(values));
+    Tracing.ThreadAccountantOps.sampleAndCheckInterruptionPeriodically(mergedKeys);
+  }
+
+  private void mergeIntermediateRecords(GroupByResultsBlock resultsBlock) {
+    int mergedKeys = 0;
+    for (IntermediateRecord intermediateResult : resultsBlock.getIntermediateRecords()) {
+      _indexedTable.upsert(intermediateResult._key, intermediateResult._record);
+      Tracing.ThreadAccountantOps.sampleAndCheckInterruptionPeriodically(mergedKeys);
+      mergedKeys++;
+    }
+  }
+
+  private void updateNumGroupsLimitReachedFlag(GroupByResultsBlock resultsBlock) {
+    if (resultsBlock.isNumGroupsLimitReached()) {
+      _numGroupsLimitReached = true;
+    }
+  }
+
+  private void initializeIndexedTableIfNeeded(GroupByResultsBlock resultsBlock) {
+    if (_indexedTable == null) {
+      synchronized (this) {
         if (_indexedTable == null) {
-          synchronized (this) {
-            if (_indexedTable == null) {
-              DataSchema dataSchema = resultsBlock.getDataSchema();
-              // NOTE: Use trimSize as resultSize on server size.
-              if (_trimThreshold >= MAX_TRIM_THRESHOLD) {
-                // special case of trim threshold where it is set to max value.
-                // there won't be any trimming during upsert in this case.
-                // thus we can avoid the overhead of read-lock and write-lock
-                // in the upsert method.
-                _indexedTable = new UnboundedConcurrentIndexedTable(dataSchema, _queryContext, _trimSize);
-              } else {
-                _indexedTable =
-                    new ConcurrentIndexedTable(dataSchema, _queryContext, _trimSize, _trimSize, _trimThreshold);
-              }
-            }
-          }
-        }
-
-        // Set groups limit reached flag.
-        if (resultsBlock.isNumGroupsLimitReached()) {
-          _numGroupsLimitReached = true;
-        }
-
-        // Merge aggregation group-by result.
-        // Iterate over the group-by keys, for each key, update the group-by result in the indexedTable
-        Collection<IntermediateRecord> intermediateRecords = resultsBlock.getIntermediateRecords();
-        // Count the number of merged keys
-        int mergedKeys = 0;
-        // For now, only GroupBy OrderBy query has pre-constructed intermediate records
-        if (intermediateRecords == null) {
-          // Merge aggregation group-by result.
-          AggregationGroupByResult aggregationGroupByResult = resultsBlock.getAggregationGroupByResult();
-          if (aggregationGroupByResult != null) {
-            // Iterate over the group-by keys, for each key, update the group-by result in the indexedTable
-            Iterator<GroupKeyGenerator.GroupKey> dicGroupKeyIterator = aggregationGroupByResult.getGroupKeyIterator();
-            while (dicGroupKeyIterator.hasNext()) {
-              GroupKeyGenerator.GroupKey groupKey = dicGroupKeyIterator.next();
-              Object[] keys = groupKey._keys;
-              Object[] values = Arrays.copyOf(keys, _numColumns);
-              int groupId = groupKey._groupId;
-              for (int i = 0; i < _numAggregationFunctions; i++) {
-                values[_numGroupByExpressions + i] = aggregationGroupByResult.getResultForGroupId(i, groupId);
-              }
-              _indexedTable.upsert(new Key(keys), new Record(values));
-              Tracing.ThreadAccountantOps.sampleAndCheckInterruptionPeriodically(mergedKeys);
-              mergedKeys++;
-            }
-          }
-        } else {
-          for (IntermediateRecord intermediateResult : intermediateRecords) {
-            //TODO: change upsert api so that it accepts intermediateRecord directly
-            _indexedTable.upsert(intermediateResult._key, intermediateResult._record);
-            Tracing.ThreadAccountantOps.sampleAndCheckInterruptionPeriodically(mergedKeys);
-            mergedKeys++;
-          }
-        }
-      } finally {
-        if (operator instanceof AcquireReleaseColumnsSegmentOperator) {
-          ((AcquireReleaseColumnsSegmentOperator) operator).release();
+          DataSchema dataSchema = resultsBlock.getDataSchema();
+          createIndexedTable(dataSchema);
         }
       }
     }
   }
+
+  private void createIndexedTable(DataSchema dataSchema) {
+    if (_trimThreshold >= MAX_TRIM_THRESHOLD) {
+      _indexedTable = new UnboundedConcurrentIndexedTable(dataSchema, _queryContext, _trimSize);
+    } else {
+      _indexedTable =
+          new ConcurrentIndexedTable(dataSchema, _queryContext, _trimSize, _trimSize, _trimThreshold);
+    }
+  }
+  //Refactoring end
 
   // TODO: combine this with the single block group by combine operator
   private BaseResultsBlock getFinalResult()

@@ -540,80 +540,24 @@ public class ForwardIndexHandler extends BaseIndexHandler {
     boolean isSVColumn = reader.isSingleValue();
 
     switch (reader.getStoredType()) {
-      // JSON fields are either stored as string or bytes. No special handling is needed because we make this
-      // decision based on the storedType of the reader.
-      case INT: {
-        for (int i = 0; i < numDocs; i++) {
-          if (isSVColumn) {
-            int val = reader.getInt(i, readerContext);
-            creator.putInt(val);
-          } else {
-            int[] ints = reader.getIntMV(i, readerContext);
-            creator.putIntMV(ints);
-          }
-        }
+      case INT:
+        handleIntColumn(reader, creator, numDocs, readerContext, isSVColumn);
         break;
-      }
-      case LONG: {
-        for (int i = 0; i < numDocs; i++) {
-          if (isSVColumn) {
-            long val = reader.getLong(i, readerContext);
-            creator.putLong(val);
-          } else {
-            long[] longs = reader.getLongMV(i, readerContext);
-            creator.putLongMV(longs);
-          }
-        }
+      case LONG:
+        handleLongColumn(reader, creator, numDocs, readerContext, isSVColumn);
         break;
-      }
-      case FLOAT: {
-        for (int i = 0; i < numDocs; i++) {
-          if (isSVColumn) {
-            float val = reader.getFloat(i, readerContext);
-            creator.putFloat(val);
-          } else {
-            float[] floats = reader.getFloatMV(i, readerContext);
-            creator.putFloatMV(floats);
-          }
-        }
+      case FLOAT:
+        handleFloatColumn(reader, creator, numDocs, readerContext, isSVColumn);
         break;
-      }
-      case DOUBLE: {
-        for (int i = 0; i < numDocs; i++) {
-          if (isSVColumn) {
-            double val = reader.getDouble(i, readerContext);
-            creator.putDouble(val);
-          } else {
-            double[] doubles = reader.getDoubleMV(i, readerContext);
-            creator.putDoubleMV(doubles);
-          }
-        }
+      case DOUBLE:
+        handleDoubleColumn(reader, creator, numDocs, readerContext, isSVColumn);
         break;
-      }
-      case STRING: {
-        for (int i = 0; i < numDocs; i++) {
-          if (isSVColumn) {
-            String val = reader.getString(i, readerContext);
-            creator.putString(val);
-          } else {
-            String[] strings = reader.getStringMV(i, readerContext);
-            creator.putStringMV(strings);
-          }
-        }
+      case STRING:
+        handleStringColumn(reader, creator, numDocs, readerContext, isSVColumn);
         break;
-      }
-      case BYTES: {
-        for (int i = 0; i < numDocs; i++) {
-          if (isSVColumn) {
-            byte[] val = reader.getBytes(i, readerContext);
-            creator.putBytes(val);
-          } else {
-            byte[][] bytesArray = reader.getBytesMV(i, readerContext);
-            creator.putBytesMV(bytesArray);
-          }
-        }
+      case BYTES:
+        handleBytesColumn(reader, creator, numDocs, readerContext, isSVColumn);
         break;
-      }
       case BIG_DECIMAL: {
         Preconditions.checkState(isSVColumn, "BigDecimal is not supported for MV columns");
         for (int i = 0; i < numDocs; i++) {
@@ -626,6 +570,85 @@ public class ForwardIndexHandler extends BaseIndexHandler {
         throw new IllegalStateException("Unsupported storedType=" + reader.getStoredType() + " for column=" + column);
     }
   }
+
+  private <C extends ForwardIndexReaderContext> void handleIntColumn(ForwardIndexReader<C> reader,
+      ForwardIndexCreator creator, int numDocs, C readerContext, boolean isSVColumn) {
+    for (int i = 0; i < numDocs; i++) {
+      if (isSVColumn) {
+        int val = reader.getInt(i, readerContext);
+        creator.putInt(val);
+      } else {
+        int[] ints = reader.getIntMV(i, readerContext);
+        creator.putIntMV(ints);
+      }
+    }
+  }
+
+  private <C extends ForwardIndexReaderContext> void handleLongColumn(ForwardIndexReader<C> reader,
+      ForwardIndexCreator creator, int numDocs, C readerContext, boolean isSVColumn) {
+    for (int i = 0; i < numDocs; i++) {
+      if (isSVColumn) {
+        long val = reader.getLong(i, readerContext);
+        creator.putLong(val);
+      } else {
+        long[] longs = reader.getLongMV(i, readerContext);
+        creator.putLongMV(longs);
+      }
+    }
+  }
+
+  private <C extends ForwardIndexReaderContext> void handleFloatColumn(ForwardIndexReader<C> reader,
+      ForwardIndexCreator creator, int numDocs, C readerContext, boolean isSVColumn) {
+    for (int i = 0; i < numDocs; i++) {
+      if (isSVColumn) {
+        float val = reader.getFloat(i, readerContext);
+        creator.putFloat(val);
+      } else {
+        float[] floats = reader.getFloatMV(i, readerContext);
+        creator.putFloatMV(floats);
+      }
+    }
+  }
+
+  private <C extends ForwardIndexReaderContext> void handleDoubleColumn(ForwardIndexReader<C> reader,
+      ForwardIndexCreator creator, int numDocs, C readerContext, boolean isSVColumn) {
+    for (int i = 0; i < numDocs; i++) {
+      if (isSVColumn) {
+        double val = reader.getDouble(i, readerContext);
+        creator.putDouble(val);
+      } else {
+        double[] doubles = reader.getDoubleMV(i, readerContext);
+        creator.putDoubleMV(doubles);
+      }
+    }
+  }
+
+  private <C extends ForwardIndexReaderContext> void handleStringColumn(ForwardIndexReader<C> reader,
+      ForwardIndexCreator creator, int numDocs, C readerContext, boolean isSVColumn) {
+    for (int i = 0; i < numDocs; i++) {
+      if (isSVColumn) {
+        String val = reader.getString(i, readerContext);
+        creator.putString(val);
+      } else {
+        String[] strings = reader.getStringMV(i, readerContext);
+        creator.putStringMV(strings);
+      }
+    }
+  }
+
+  private <C extends ForwardIndexReaderContext> void handleBytesColumn(ForwardIndexReader<C> reader,
+      ForwardIndexCreator creator, int numDocs, C readerContext, boolean isSVColumn) {
+    for (int i = 0; i < numDocs; i++) {
+      if (isSVColumn) {
+        byte[] val = reader.getBytes(i, readerContext);
+        creator.putBytes(val);
+      } else {
+        byte[][] bytesArray = reader.getBytesMV(i, readerContext);
+        creator.putBytesMV(bytesArray);
+      }
+    }
+  }
+//Refactoring end
 
   private <C extends ForwardIndexReaderContext> void forwardIndexReadDictWriteRawHelper(String column,
       ColumnMetadata existingColumnMetadata, ForwardIndexReader<C> reader, ForwardIndexCreator creator, int numDocs,

@@ -74,48 +74,69 @@ public class ArrayAverageTransformFunction extends BaseTransformFunction {
     initDoubleValuesSV(length);
     switch (_argument.getResultMetadata().getDataType().getStoredType()) {
       case INT:
-        int[][] intValuesMV = _argument.transformToIntValuesMV(valueBlock);
-        for (int i = 0; i < length; i++) {
-          double sumRes = 0;
-          for (int value : intValuesMV[i]) {
-            sumRes += value;
-          }
-          _doubleValuesSV[i] = sumRes / intValuesMV[i].length;
-        }
+        _doubleValuesSV = calculateAverage(transformToIntValuesMV(valueBlock), length);
         break;
       case LONG:
-        long[][] longValuesMV = _argument.transformToLongValuesMV(valueBlock);
-        for (int i = 0; i < length; i++) {
-          double sumRes = 0;
-          for (long value : longValuesMV[i]) {
-            sumRes += value;
-          }
-          _doubleValuesSV[i] = sumRes / longValuesMV[i].length;
-        }
+        _doubleValuesSV = calculateAverage(transformToLongValuesMV(valueBlock), length);
         break;
       case FLOAT:
-        float[][] floatValuesMV = _argument.transformToFloatValuesMV(valueBlock);
-        for (int i = 0; i < length; i++) {
-          double sumRes = 0;
-          for (float value : floatValuesMV[i]) {
-            sumRes += value;
-          }
-          _doubleValuesSV[i] = sumRes / floatValuesMV[i].length;
-        }
+        _doubleValuesSV = calculateAverage(transformToFloatValuesMV(valueBlock), length);
         break;
       case DOUBLE:
-        double[][] doubleValuesMV = _argument.transformToDoubleValuesMV(valueBlock);
-        for (int i = 0; i < length; i++) {
-          double sumRes = 0;
-          for (double value : doubleValuesMV[i]) {
-            sumRes += value;
-          }
-          _doubleValuesSV[i] = sumRes / doubleValuesMV[i].length;
-        }
+        _doubleValuesSV = calculateAverage(transformToDoubleValuesMV(valueBlock), length);
         break;
       default:
         throw new IllegalStateException();
     }
     return _doubleValuesSV;
   }
-}
+
+  private double[] calculateAverage(int[][] values, int length) {
+    double[] averages = new double[length];
+    for (int i = 0; i < length; i++) {
+      double sum = 0;
+      for (int value : values[i]) {
+        sum += value;
+      }
+      averages[i] = sum / values[i].length;
+    }
+    return averages;
+  }
+
+  private double[] calculateAverage(long[][] values, int length) {
+    double[] averages = new double[length];
+    for (int i = 0; i < length; i++) {
+      double sum = 0;
+      for (long value : values[i]) {
+        sum += value;
+      }
+      averages[i] = sum / values[i].length;
+    }
+    return averages;
+  }
+
+  private double[] calculateAverage(float[][] values, int length) {
+    double[] averages = new double[length];
+    for (int i = 0; i < length; i++) {
+      double sum = 0;
+      for (float value : values[i]) {
+        sum += value;
+      }
+      averages[i] = sum / values[i].length;
+    }
+    return averages;
+  }
+
+  private double[] calculateAverage(double[][] values, int length) {
+    double[] averages = new double[length];
+    for (int i = 0; i < length; i++) {
+      double sum = 0;
+      for (double value : values[i]) {
+        sum += value;
+      }
+      averages[i] = sum / values[i].length;
+    }
+    return averages;
+  }
+
+//Refactoring end

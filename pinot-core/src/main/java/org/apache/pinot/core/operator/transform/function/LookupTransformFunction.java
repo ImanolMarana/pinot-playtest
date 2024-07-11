@@ -171,59 +171,66 @@ public class LookupTransformFunction extends BaseTransformFunction {
   private void lookup(ValueBlock valueBlock, ValueAcceptor valueAcceptor) {
     int numPkColumns = _joinKeys.size();
     int numDocuments = valueBlock.getNumDocs();
-    Object[] pkColumns = new Object[numPkColumns];
-    for (int c = 0; c < numPkColumns; c++) {
-      DataType storedType = _joinValueFieldSpecs.get(c).getDataType().getStoredType();
-      TransformFunction tf = _joinValueFunctions.get(c);
-      switch (storedType) {
-        case INT:
-          pkColumns[c] = tf.transformToIntValuesSV(valueBlock);
-          break;
-        case LONG:
-          pkColumns[c] = tf.transformToLongValuesSV(valueBlock);
-          break;
-        case FLOAT:
-          pkColumns[c] = tf.transformToFloatValuesSV(valueBlock);
-          break;
-        case DOUBLE:
-          pkColumns[c] = tf.transformToDoubleValuesSV(valueBlock);
-          break;
-        case STRING:
-          pkColumns[c] = tf.transformToStringValuesSV(valueBlock);
-          break;
-        case BYTES:
-          pkColumns[c] = tf.transformToBytesValuesSV(valueBlock);
-          break;
-        default:
-          throw new IllegalStateException("Unknown column type for primary key");
-      }
-    }
+    Object[] pkColumns = extractPkColumns(valueBlock, numPkColumns);
 
     Object[] pkValues = new Object[numPkColumns];
     PrimaryKey primaryKey = new PrimaryKey(pkValues);
     for (int i = 0; i < numDocuments; i++) {
-      // prepare pk
-      for (int c = 0; c < numPkColumns; c++) {
-        if (pkColumns[c] instanceof int[]) {
-          pkValues[c] = ((int[]) pkColumns[c])[i];
-        } else if (pkColumns[c] instanceof long[]) {
-          pkValues[c] = ((long[]) pkColumns[c])[i];
-        } else if (pkColumns[c] instanceof String[]) {
-          pkValues[c] = ((String[]) pkColumns[c])[i];
-        } else if (pkColumns[c] instanceof float[]) {
-          pkValues[c] = ((float[]) pkColumns[c])[i];
-        } else if (pkColumns[c] instanceof double[]) {
-          pkValues[c] = ((double[]) pkColumns[c])[i];
-        } else if (pkColumns[c] instanceof byte[][]) {
-          pkValues[c] = new ByteArray(((byte[][]) pkColumns[c])[i]);
-        }
-      }
-      // lookup
+      preparePrimaryKey(pkColumns, pkValues, i);
       GenericRow row = _dataManager.lookupRowByPrimaryKey(primaryKey);
       Object value = row == null ? null : row.getValue(_dimColumnName);
       valueAcceptor.accept(i, value);
     }
   }
+
+  private Object[] extractPkColumns(ValueBlock valueBlock, int numPkColumns) {
+    Object[] pkColumns = new Object[numPkColumns];
+    for (int c = 0; c < numPkColumns; c++) {
+      DataType storedType = _joinValueFieldSpecs.get(c).getDataType().getStoredType();
+      TransformFunction tf = _joinValueFunctions.get(c);
+      pkColumns[c] = extractPkColumn(storedType, tf, valueBlock);
+    }
+    return pkColumns;
+  }
+
+  private Object extractPkColumn(DataType storedType, TransformFunction tf, ValueBlock valueBlock) {
+    switch (storedType) {
+      case INT:
+        return tf.transformToIntValuesSV(valueBlock);
+      case LONG:
+        return tf.transformToLongValuesSV(valueBlock);
+      case FLOAT:
+        return tf.transformToFloatValuesSV(valueBlock);
+      case DOUBLE:
+        return tf.transformToDoubleValuesSV(valueBlock);
+      case STRING:
+        return tf.transformToStringValuesSV(valueBlock);
+      case BYTES:
+        return tf.transformToBytesValuesSV(valueBlock);
+      default:
+        throw new IllegalStateException("Unknown column type for primary key");
+    }
+  }
+
+  private void preparePrimaryKey(Object[] pkColumns, Object[] pkValues, int i) {
+    for (int c = 0; c < pkColumns.length; c++) {
+      if (pkColumns[c] instanceof int[]) {
+        pkValues[c] = ((int[]) pkColumns[c])[i];
+      } else if (pkColumns[c] instanceof long[]) {
+        pkValues[c] = ((long[]) pkColumns[c])[i];
+      } else if (pkColumns[c] instanceof String[]) {
+        pkValues[c] = ((String[]) pkColumns[c])[i];
+      } else if (pkColumns[c] instanceof float[]) {
+        pkValues[c] = ((float[]) pkColumns[c])[i];
+      } else if (pkColumns[c] instanceof double[]) {
+        pkValues[c] = ((double[]) pkColumns[c])[i];
+      } else if (pkColumns[c] instanceof byte[][]) {
+        pkValues[c] = new ByteArray(((byte[][]) pkColumns[c])[i]);
+      }
+    }
+  }
+
+//Refactoring end
 
   @Override
   public int[] transformToIntValuesSV(ValueBlock valueBlock) {

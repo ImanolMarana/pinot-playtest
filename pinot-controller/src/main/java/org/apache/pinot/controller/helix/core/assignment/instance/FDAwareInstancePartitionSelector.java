@@ -127,120 +127,145 @@ public class FDAwareInstancePartitionSelector extends InstancePartitionSelector 
       int numReplicaGroups = rgRet.getLeft();
       int numInstancesPerReplicaGroup = rgRet.getRight();
 
-      /*
-       * create an FD_id -> instance_names map and initialize with current instances, we will later exclude instances
-       * in existing assignment, and use the rest instances to do the assigment
-       */
-      Map<Integer, LinkedHashSet<String>> faultDomainToCandidateInstancesMap = new TreeMap<>();
-      faultDomainToInstanceConfigsMap.forEach(
-          (k, v) -> faultDomainToCandidateInstancesMap.put(k, new LinkedHashSet<String>() {{
-            v.forEach(instance -> add(instance.getInstanceName()));
-          }}));
-
-      // create an instance_name -> FD_id map, just for look up
-      Map<String, Integer> aliveInstanceNameToFDMap = new HashMap<>();
-      faultDomainToCandidateInstancesMap.forEach(
-          (faultDomainId, value) -> value.forEach(instance -> aliveInstanceNameToFDMap.put(instance, faultDomainId)));
-
-      // replicaGroupBasedAssignmentState for assignment
-      ReplicaGroupBasedAssignmentState replicaGroupBasedAssignmentState = null;
-
-      /*
-       * initialize the new replicaGroupBasedAssignmentState for assignment,
-       * place existing instances in their corresponding positions
-       */
-      if (_minimizeDataMovement) {
-        int numExistingReplicaGroups = _existingInstancePartitions.getNumReplicaGroups();
-        int numExistingPartitions = _existingInstancePartitions.getNumPartitions();
-        /*
-         * reconstruct a replica group -> instance mapping from _existingInstancePartitions,
-         */
-        LinkedHashSet<String> existingReplicaGroup = new LinkedHashSet<>();
-        for (int i = 0; i < numExistingReplicaGroups; i++, existingReplicaGroup.clear()) {
-          for (int j = 0; j < numExistingPartitions; j++) {
-            existingReplicaGroup.addAll(_existingInstancePartitions.getInstances(j, i));
-          }
-
-          /*
-           * We can only know the numExistingInstancesPerReplicaGroup after we reconstructed the sequence of instances
-           * in the first replica group
-           */
-          if (i == 0) {
-            int numExistingInstancesPerReplicaGroup = existingReplicaGroup.size();
-            replicaGroupBasedAssignmentState =
-                new ReplicaGroupBasedAssignmentState(numReplicaGroups, numInstancesPerReplicaGroup,
-                    numExistingReplicaGroups, numExistingInstancesPerReplicaGroup, numFaultDomains);
-          }
-
-          replicaGroupBasedAssignmentState.reconstructExistingAssignment(existingReplicaGroup, i,
-              aliveInstanceNameToFDMap);
-        }
-      } else {
-        // Fresh new assignment
-        replicaGroupBasedAssignmentState =
-            new ReplicaGroupBasedAssignmentState(numReplicaGroups, numInstancesPerReplicaGroup, numFaultDomains);
-      }
-      /*finish replicaGroupBasedAssignmentState initialization*/
-
-      Preconditions.checkState(replicaGroupBasedAssignmentState != null);
-
-      // preprocess the downsizing and exclude unchanged existing assigment from the candidate list
-      replicaGroupBasedAssignmentState.preprocessing(faultDomainToCandidateInstancesMap);
-
-      // preprocess the problem of numReplicaGroups >= numFaultDomains to a problem
-      replicaGroupBasedAssignmentState.normalize(faultDomainToCandidateInstancesMap);
-
-      // fill the remaining vacant seats
-      replicaGroupBasedAssignmentState.fill(faultDomainToCandidateInstancesMap);
-
-      // adjust the instance assignment to achieve the invariant state
-      replicaGroupBasedAssignmentState.swapToInvariantState();
-
-      // In the following we assign instances to partitions.
-      // TODO: refine this and segment assignment to minimize movement during numInstancesPerReplicaGroup uplift
-      // Assign instances within a replica-group to one partition if not configured
-      int numPartitions = _replicaGroupPartitionConfig.getNumPartitions();
-      if (numPartitions <= 0) {
-        numPartitions = 1;
-      }
-      // Assign all instances within a replica-group to each partition if not configured
-      int numInstancesPerPartition = _replicaGroupPartitionConfig.getNumInstancesPerPartition();
-      if (numInstancesPerPartition > 0) {
-        Preconditions.checkState(numInstancesPerPartition <= numInstancesPerReplicaGroup,
-            "Number of instances per partition: %s must be smaller or equal to number of instances per replica-group:"
-                + " %s", numInstancesPerPartition, numInstancesPerReplicaGroup);
-      } else {
-        numInstancesPerPartition = numInstancesPerReplicaGroup;
-      }
-      LOGGER.info("Selecting {} partitions, {} instances per partition within a replica-group for table: {}",
-          numPartitions, numInstancesPerPartition, _tableNameWithType);
-
-      // Assign consecutive instances within a replica-group to each partition.
-      // E.g. (within a replica-group, 5 instances, 3 partitions, 3 instances per partition)
-      // [i0, i1, i2, i3, i4]
-      //  p0  p0  p0  p1  p1
-      //  p1  p2  p2  p2
-      for (int replicaGroupId = 0; replicaGroupId < numReplicaGroups; replicaGroupId++) {
-        int instanceIdInReplicaGroup = 0;
-        for (int partitionId = 0; partitionId < numPartitions; partitionId++) {
-          List<String> instancesInPartition = new ArrayList<>(numInstancesPerPartition);
-          for (int instanceIdInPartition = 0; instanceIdInPartition < numInstancesPerPartition;
-              instanceIdInPartition++) {
-            instancesInPartition.add(
-                replicaGroupBasedAssignmentState.
-                    _replicaGroupIdToInstancesMap[replicaGroupId][instanceIdInReplicaGroup].getInstanceName());
-            instanceIdInReplicaGroup = (instanceIdInReplicaGroup + 1) % numInstancesPerReplicaGroup;
-          }
-          LOGGER.info("Selecting instances: {} for replica-group: {}, partition: {} for table: {}",
-              instancesInPartition, replicaGroupId, partitionId, _tableNameWithType);
-          instancePartitions.setInstances(partitionId, replicaGroupId, instancesInPartition);
-        }
-      }
+      selectInstancesReplicaGroupBased(faultDomainToInstanceConfigsMap, instancePartitions, numReplicaGroups,
+          numInstancesPerReplicaGroup, numFaultDomains);
     } else {
       throw new IllegalStateException("Non-replica-group based selection unfinished");
       // TODO:Non-replica-group based selection
     }
   }
+
+  private void selectInstancesReplicaGroupBased(Map<Integer, List<InstanceConfig>> faultDomainToInstanceConfigsMap,
+      InstancePartitions instancePartitions, int numReplicaGroups, int numInstancesPerReplicaGroup,
+      int numFaultDomains) {
+    /*
+     * create an FD_id -> instance_names map and initialize with current instances, we will later exclude instances
+     * in existing assignment, and use the rest instances to do the assigment
+     */
+    Map<Integer, LinkedHashSet<String>> faultDomainToCandidateInstancesMap = new TreeMap<>();
+    faultDomainToInstanceConfigsMap.forEach(
+        (k, v) -> faultDomainToCandidateInstancesMap.put(k, new LinkedHashSet<String>() {{
+          v.forEach(instance -> add(instance.getInstanceName()));
+        }}));
+
+    // create an instance_name -> FD_id map, just for look up
+    Map<String, Integer> aliveInstanceNameToFDMap = new HashMap<>();
+    faultDomainToCandidateInstancesMap.forEach(
+        (faultDomainId, value) -> value.forEach(instance -> aliveInstanceNameToFDMap.put(instance, faultDomainId)));
+
+    // replicaGroupBasedAssignmentState for assignment
+    ReplicaGroupBasedAssignmentState replicaGroupBasedAssignmentState = null;
+
+    /*
+     * initialize the new replicaGroupBasedAssignmentState for assignment,
+     * place existing instances in their corresponding positions
+     */
+    if (_minimizeDataMovement) {
+      replicaGroupBasedAssignmentState = initializeAssignmentStateWithExistingDataMovement(
+          aliveInstanceNameToFDMap, numReplicaGroups, numInstancesPerReplicaGroup, numFaultDomains);
+    } else {
+      // Fresh new assignment
+      replicaGroupBasedAssignmentState =
+          new ReplicaGroupBasedAssignmentState(numReplicaGroups, numInstancesPerReplicaGroup, numFaultDomains);
+    }
+    /*finish replicaGroupBasedAssignmentState initialization*/
+
+    Preconditions.checkState(replicaGroupBasedAssignmentState != null);
+
+    // preprocess the downsizing and exclude unchanged existing assigment from the candidate list
+    replicaGroupBasedAssignmentState.preprocessing(faultDomainToCandidateInstancesMap);
+
+    // preprocess the problem of numReplicaGroups >= numFaultDomains to a problem
+    replicaGroupBasedAssignmentState.normalize(faultDomainToCandidateInstancesMap);
+
+    // fill the remaining vacant seats
+    replicaGroupBasedAssignmentState.fill(faultDomainToCandidateInstancesMap);
+
+    // adjust the instance assignment to achieve the invariant state
+    replicaGroupBasedAssignmentState.swapToInvariantState();
+
+    assignInstancesToPartitions(instancePartitions, numReplicaGroups, numInstancesPerReplicaGroup,
+        replicaGroupBasedAssignmentState);
+  }
+
+  private ReplicaGroupBasedAssignmentState initializeAssignmentStateWithExistingDataMovement(
+      Map<String, Integer> aliveInstanceNameToFDMap, int numReplicaGroups, int numInstancesPerReplicaGroup,
+      int numFaultDomains) {
+    ReplicaGroupBasedAssignmentState replicaGroupBasedAssignmentState;
+    int numExistingReplicaGroups = _existingInstancePartitions.getNumReplicaGroups();
+    int numExistingPartitions = _existingInstancePartitions.getNumPartitions();
+    /*
+     * reconstruct a replica group -> instance mapping from _existingInstancePartitions,
+     */
+    LinkedHashSet<String> existingReplicaGroup = new LinkedHashSet<>();
+    for (int i = 0; i < numExistingReplicaGroups; i++, existingReplicaGroup.clear()) {
+      for (int j = 0; j < numExistingPartitions; j++) {
+        existingReplicaGroup.addAll(_existingInstancePartitions.getInstances(j, i));
+      }
+      /*
+       * We can only know the numExistingInstancesPerReplicaGroup after we reconstructed the sequence of instances
+       * in the first replica group
+       */
+      if (i == 0) {
+        int numExistingInstancesPerReplicaGroup = existingReplicaGroup.size();
+        replicaGroupBasedAssignmentState =
+            new ReplicaGroupBasedAssignmentState(numReplicaGroups, numInstancesPerReplicaGroup,
+                numExistingReplicaGroups, numExistingInstancesPerReplicaGroup, numFaultDomains);
+      } else {
+        replicaGroupBasedAssignmentState = null;
+      }
+
+      replicaGroupBasedAssignmentState.reconstructExistingAssignment(existingReplicaGroup, i,
+          aliveInstanceNameToFDMap);
+    }
+    return replicaGroupBasedAssignmentState;
+  }
+
+  private void assignInstancesToPartitions(InstancePartitions instancePartitions, int numReplicaGroups,
+      int numInstancesPerReplicaGroup, ReplicaGroupBasedAssignmentState replicaGroupBasedAssignmentState) {
+    // In the following we assign instances to partitions.
+    // TODO: refine this and segment assignment to minimize movement during numInstancesPerReplicaGroup uplift
+    // Assign instances within a replica-group to one partition if not configured
+    int numPartitions = _replicaGroupPartitionConfig.getNumPartitions();
+    if (numPartitions <= 0) {
+      numPartitions = 1;
+    }
+    // Assign all instances within a replica-group to each partition if not configured
+    int numInstancesPerPartition = _replicaGroupPartitionConfig.getNumInstancesPerPartition();
+    if (numInstancesPerPartition > 0) {
+      Preconditions.checkState(numInstancesPerPartition <= numInstancesPerReplicaGroup,
+          "Number of instances per partition: %s must be smaller or equal to number of instances per replica-group:"
+              + " %s", numInstancesPerPartition, numInstancesPerReplicaGroup);
+    } else {
+      numInstancesPerPartition = numInstancesPerReplicaGroup;
+    }
+    LOGGER.info("Selecting {} partitions, {} instances per partition within a replica-group for table: {}",
+        numPartitions, numInstancesPerPartition, _tableNameWithType);
+
+    // Assign consecutive instances within a replica-group to each partition.
+    // E.g. (within a replica-group, 5 instances, 3 partitions, 3 instances per partition)
+    // [i0, i1, i2, i3, i4]
+    //  p0  p0  p0  p1  p1
+    //  p1  p2  p2  p2
+    for (int replicaGroupId = 0; replicaGroupId < numReplicaGroups; replicaGroupId++) {
+      int instanceIdInReplicaGroup = 0;
+      for (int partitionId = 0; partitionId < numPartitions; partitionId++) {
+        List<String> instancesInPartition = new ArrayList<>(numInstancesPerPartition);
+        for (int instanceIdInPartition = 0; instanceIdInPartition < numInstancesPerPartition;
+            instanceIdInPartition++) {
+          instancesInPartition.add(
+              replicaGroupBasedAssignmentState.
+                  _replicaGroupIdToInstancesMap[replicaGroupId][instanceIdInReplicaGroup].getInstanceName());
+          instanceIdInReplicaGroup = (instanceIdInReplicaGroup + 1) % numInstancesPerReplicaGroup;
+        }
+        LOGGER.info("Selecting instances: {} for replica-group: {}, partition: {} for table: {}",
+            instancesInPartition, replicaGroupId, partitionId, _tableNameWithType);
+        instancePartitions.setInstances(partitionId, replicaGroupId, instancesInPartition);
+      }
+    }
+  }
+
+//Refactoring end
 
   private static class CandidateQueue {
     NavigableMap<Integer, Deque<String>> _map;

@@ -107,52 +107,83 @@ public class SchemaUtils {
     schema.validate();
 
     if (isIgnoreCase) {
-      Set<String> lowerCaseColumnNames = new HashSet<>();
-      for (String column : schema.getColumnNames()) {
-        Preconditions.checkState(lowerCaseColumnNames.add(column.toLowerCase()),
-          "When enable case insensitive, you can't use the same lowercase column name: %s",
-          column.toLowerCase());
-      }
+      validateCaseInsensitiveColumnNames(schema);
     }
+
     Set<String> transformedColumns = new HashSet<>();
     Set<String> argumentColumns = new HashSet<>();
     Set<String> primaryKeyColumnCandidates = new HashSet<>();
     for (FieldSpec fieldSpec : schema.getAllFieldSpecs()) {
       if (!fieldSpec.isVirtualColumn()) {
-        String column = fieldSpec.getName();
-        Preconditions.checkState(!StringUtils.containsWhitespace(column),
-            "The column name \"%s\" should not contain blank space.", column);
-        primaryKeyColumnCandidates.add(column);
-        String transformFunction = fieldSpec.getTransformFunction();
-        if (transformFunction != null) {
-          try {
-            List<String> arguments = FunctionEvaluatorFactory.getExpressionEvaluator(fieldSpec).getArguments();
-            Preconditions.checkState(!arguments.contains(column),
-                "The arguments of transform function %s should not contain the destination column %s",
-                transformFunction, column);
-            transformedColumns.add(column);
-            argumentColumns.addAll(arguments);
-          } catch (Exception e) {
-            throw new IllegalStateException(
-                "Exception in getting arguments for transform function '" + transformFunction + "' for column '"
-                    + column + "'", e);
-          }
-        }
-        if (fieldSpec.getFieldType().equals(FieldSpec.FieldType.TIME)) {
-          validateTimeFieldSpec((TimeFieldSpec) fieldSpec);
-        }
-        if (fieldSpec.getFieldType().equals(FieldSpec.FieldType.DATE_TIME)) {
-          validateDateTimeFieldSpec((DateTimeFieldSpec) fieldSpec);
-        }
-        if (fieldSpec.getDataType().equals(FieldSpec.DataType.FLOAT) || fieldSpec.getDataType()
-            .equals(FieldSpec.DataType.DOUBLE)) {
-          validateDefaultIsNotNaN(fieldSpec);
-        }
+        validateFieldSpec(fieldSpec, transformedColumns, argumentColumns, primaryKeyColumnCandidates);
       }
     }
+
+    validateTransformedColumns(transformedColumns, argumentColumns);
+    validatePrimaryKeyColumns(schema, primaryKeyColumnCandidates);
+  }
+
+  private static void validateCaseInsensitiveColumnNames(Schema schema) {
+    Set<String> lowerCaseColumnNames = new HashSet<>();
+    for (String column : schema.getColumnNames()) {
+      Preconditions.checkState(lowerCaseColumnNames.add(column.toLowerCase()),
+          "When enable case insensitive, you can't use the same lowercase column name: %s",
+          column.toLowerCase());
+    }
+  }
+
+  private static void validateFieldSpec(FieldSpec fieldSpec, Set<String> transformedColumns,
+      Set<String> argumentColumns, Set<String> primaryKeyColumnCandidates) {
+    String column = fieldSpec.getName();
+    Preconditions.checkState(!StringUtils.containsWhitespace(column),
+        "The column name \"%s\" should not contain blank space.", column);
+    primaryKeyColumnCandidates.add(column);
+
+    validateTransformFunction(fieldSpec, transformedColumns, argumentColumns);
+
+    if (fieldSpec.getFieldType().equals(FieldSpec.FieldType.TIME)) {
+      validateTimeFieldSpec((TimeFieldSpec) fieldSpec);
+    }
+    if (fieldSpec.getFieldType().equals(FieldSpec.FieldType.DATE_TIME)) {
+      validateDateTimeFieldSpec((DateTimeFieldSpec) fieldSpec);
+    }
+    if (fieldSpec.getDataType().equals(FieldSpec.DataType.FLOAT) || fieldSpec.getDataType()
+        .equals(FieldSpec.DataType.DOUBLE)) {
+      validateDefaultIsNotNaN(fieldSpec);
+    }
+  }
+
+  private static void validateTransformFunction(FieldSpec fieldSpec, Set<String> transformedColumns,
+      Set<String> argumentColumns) {
+    String transformFunction = fieldSpec.getTransformFunction();
+    if (transformFunction != null) {
+      try {
+        List<String> arguments = FunctionEvaluatorFactory.getExpressionEvaluator(fieldSpec)
+            .getArguments();
+        String column = fieldSpec.getName();
+        Preconditions.checkState(!arguments.contains(column),
+            "The arguments of transform function %s should not contain the destination column %s",
+            transformFunction, column);
+        transformedColumns.add(column);
+        argumentColumns.addAll(arguments);
+      } catch (Exception e) {
+        throw new IllegalStateException(
+            "Exception in getting arguments for transform function '" + transformFunction
+                + "' for column '"
+                + fieldSpec.getName() + "'", e);
+      }
+    }
+  }
+
+  private static void validateTransformedColumns(Set<String> transformedColumns,
+      Set<String> argumentColumns) {
     Preconditions.checkState(Collections.disjoint(transformedColumns, argumentColumns),
         "Columns: %s are a result of transformations, and cannot be used as arguments to other transform functions",
         transformedColumns.retainAll(argumentColumns));
+  }
+
+  private static void validatePrimaryKeyColumns(Schema schema,
+      Set<String> primaryKeyColumnCandidates) {
     if (schema.getPrimaryKeyColumns() != null) {
       for (String primaryKeyColumn : schema.getPrimaryKeyColumns()) {
         Preconditions.checkState(primaryKeyColumnCandidates.contains(primaryKeyColumn),
@@ -160,6 +191,9 @@ public class SchemaUtils {
       }
     }
   }
+
+
+//Refactoring end
 
   private static void validateDefaultIsNotNaN(FieldSpec fieldSpec) {
     Preconditions.checkState(!fieldSpec.getDefaultNullValueString().equals("NaN"),

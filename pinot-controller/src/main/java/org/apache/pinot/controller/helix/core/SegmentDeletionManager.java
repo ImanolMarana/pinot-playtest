@@ -308,32 +308,7 @@ public class SegmentDeletionManager {
         }
 
         for (String tableNameDir : tableNameDirs) {
-          String tableName = URIUtils.getLastPart(tableNameDir);
-          if (leadControllerManager.isLeaderForTable(tableName)) {
-            URI tableNameURI = URIUtils.getUri(deletedDirURI.toString(), URIUtils.encode(tableName));
-            // Get files that are aged
-            final String[] targetFiles = pinotFS.listFiles(tableNameURI, false);
-            int numFilesDeleted = 0;
-            for (String targetFile : targetFiles) {
-              URI targetURI =
-                  URIUtils.getUri(tableNameURI.toString(), URIUtils.encode(URIUtils.getLastPart(targetFile)));
-              long deletionTimeMs = getDeletionTimeMsFromFile(targetURI.toString(), pinotFS.lastModified(targetURI));
-              if (System.currentTimeMillis() >= deletionTimeMs) {
-                if (!pinotFS.delete(targetURI, true)) {
-                  LOGGER.warn("Cannot remove file {} from deleted directory.", targetURI);
-                } else {
-                  numFilesDeleted++;
-                }
-              }
-            }
-
-            if (numFilesDeleted == targetFiles.length) {
-              // Delete directory if it's empty
-              if (!pinotFS.delete(tableNameURI, false)) {
-                LOGGER.warn("The directory {} cannot be removed.", tableNameDir);
-              }
-            }
-          }
+          processTableNameDir(leadControllerManager, pinotFS, deletedDirURI, tableNameDir);
         }
       } catch (IOException e) {
         LOGGER.error("Had trouble deleting directories: {}", deletedDirURI.toString(), e);
@@ -342,6 +317,77 @@ public class SegmentDeletionManager {
       LOGGER.info("dataDir is not configured, won't delete any expired segments from deleted directory.");
     }
   }
+
+  private void processTableNameDir(LeadControllerManager leadControllerManager, PinotFS pinotFS, URI deletedDirURI,
+      String tableNameDir)
+      throws IOException {
+    String tableName = URIUtils.getLastPart(tableNameDir);
+    if (leadControllerManager.isLeaderForTable(tableName)) {
+      URI tableNameURI = URIUtils.getUri(deletedDirURI.toString(), URIUtils.encode(tableName));
+      // Get files that are aged
+      final String[] targetFiles = pinotFS.listFiles(tableNameURI, false);
+      int numFilesDeleted = deleteAgedFiles(pinotFS, tableNameURI, targetFiles);
+
+      if (numFilesDeleted == targetFiles.length) {
+        // Delete directory if it's empty
+        if (!pinotFS.delete(tableNameURI, false)) {
+          LOGGER.warn("The directory {} cannot be removed.", tableNameDir);
+        }
+      }
+    }
+  }
+
+  private int deleteAgedFiles(PinotFS pinotFS, URI tableNameURI, String[] targetFiles)
+      throws IOException {
+    int numFilesDeleted = 0;
+    for (String targetFile : targetFiles) {
+      URI targetURI =
+          URIUtils.getUri(tableNameURI.toString(), URIUtils.encode(URIUtils.getLastPart(targetFile)));
+      long deletionTimeMs = getDeletionTimeMsFromFile(targetURI.toString(), pinotFS.lastModified(targetURI));
+      if (System.currentTimeMillis() >= deletionTimeMs) {
+        if (!pinotFS.delete(targetURI, true)) {
+          LOGGER.warn("Cannot remove file {} from deleted directory.", targetURI);
+        } else {
+          numFilesDeleted++;
+        }
+      }
+    }
+    return numFilesDeleted;
+  }
+
+  private String getDeletedSegmentFileName(String fileName, long deletedSegmentsRetentionMs) {
+    return fileName + RETENTION_UNTIL_SEPARATOR + RETENTION_DATE_FORMAT.format(new Date(
+        System.currentTimeMillis() + deletedSegmentsRetentionMs));
+  }
+
+  private long getDeletionTimeMsFromFile(String targetFile, long lastModifiedTime) {
+    String[] split = StringUtils.splitByWholeSeparator(targetFile, RETENTION_UNTIL_SEPARATOR);
+    if (split.length == 2) {
+      try {
+        return RETENTION_DATE_FORMAT.parse(split[1]).getTime();
+      } catch (Exception e) {
+        LOGGER.warn("No retention suffix found for file: {}", targetFile);
+      }
+    }
+    LOGGER.info("Fallback to using default cluster retention config: {} ms", _defaultDeletedSegmentsRetentionMs);
+    return lastModifiedTime + _defaultDeletedSegmentsRetentionMs;
+  }
+
+  @Nullable
+  public static Long getRetentionMsFromTableConfig(@Nullable TableConfig tableConfig) {
+    if (tableConfig != null) {
+      SegmentsValidationAndRetentionConfig validationConfig = tableConfig.getValidationConfig();
+      if (!StringUtils.isEmpty(validationConfig.getDeletedSegmentsRetentionPeriod())) {
+        try {
+          return TimeUtils.convertPeriodToMillis(validationConfig.getDeletedSegmentsRetentionPeriod());
+        } catch (Exception e) {
+          LOGGER.warn("Unable to parse deleted segment retention config for table {}", tableConfig.getTableName(), e);
+        }
+      }
+    }
+    return null;
+  }
+  //Refactoring end
 
   private String getDeletedSegmentFileName(String fileName, long deletedSegmentsRetentionMs) {
     return fileName + RETENTION_UNTIL_SEPARATOR + RETENTION_DATE_FORMAT.format(new Date(

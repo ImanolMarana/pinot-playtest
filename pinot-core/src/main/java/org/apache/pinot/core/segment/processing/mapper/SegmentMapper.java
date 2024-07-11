@@ -174,31 +174,49 @@ public class SegmentMapper {
       // TODO: Add ComplexTypeTransformer here. Currently it is not idempotent so cannot add it
 
       if (reuse.getValue(GenericRow.MULTIPLE_RECORDS_KEY) != null) {
-        //noinspection unchecked
-        for (GenericRow row : (Collection<GenericRow>) reuse.getValue(GenericRow.MULTIPLE_RECORDS_KEY)) {
-          GenericRow transformedRow = _recordTransformer.transform(row);
-          if (transformedRow != null && IngestionUtils.shouldIngestRow(transformedRow)) {
-            writeRecord(transformedRow);
-          }
-        }
+        processMultipleRecords(reuse);
       } else {
-        GenericRow transformedRow = _recordTransformer.transform(reuse);
-        if (transformedRow != null && IngestionUtils.shouldIngestRow(transformedRow)) {
-          writeRecord(transformedRow);
-        }
+        processSingleRecord(reuse);
       }
       reuse.clear();
     }
+    return shouldContinueMapPhase(recordReader, count, totalCount);
+  }
+
+  private void processMultipleRecords(GenericRow reuse) throws IOException {
+    //noinspection unchecked
+    for (GenericRow row : (Collection<GenericRow>) reuse.getValue(GenericRow.MULTIPLE_RECORDS_KEY)) {
+      processTransformedRow(row);
+    }
+  }
+
+  private void processSingleRecord(GenericRow reuse) throws IOException {
+    GenericRow transformedRow = _recordTransformer.transform(reuse);
+    if (transformedRow != null && IngestionUtils.shouldIngestRow(transformedRow)) {
+      writeRecord(transformedRow);
+    }
+  }
+
+  private void processTransformedRow(GenericRow row) throws IOException {
+    GenericRow transformedRow = _recordTransformer.transform(row);
+    if (transformedRow != null && IngestionUtils.shouldIngestRow(transformedRow)) {
+      writeRecord(transformedRow);
+    }
+  }
+
+  private boolean shouldContinueMapPhase(RecordReader recordReader, int count, int totalCount) {
     if (recordReader.hasNext() && !_adaptiveSizeBasedWriter.canWrite()) {
       String logMessage = String.format(
           "Stopping record readers at index: %d out of %d passed to mapper as size limit reached, bytes written = %d,"
               + " bytes " + "limit = %d", count, totalCount, _adaptiveSizeBasedWriter.getNumBytesWritten(),
           _adaptiveSizeBasedWriter.getBytesLimit());
-      observer.accept(logMessage);
       LOGGER.info(logMessage);
       return false;
     }
     return true;
+  }
+
+//Refactoring end
   }
 
   private void writeRecord(GenericRow row)

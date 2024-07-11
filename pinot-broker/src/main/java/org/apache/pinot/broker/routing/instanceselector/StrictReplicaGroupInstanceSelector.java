@@ -100,31 +100,49 @@ public class StrictReplicaGroupInstanceSelector extends ReplicaGroupInstanceSele
     Map<String, Map<String, String>> idealStateAssignment = idealState.getRecord().getMapFields();
     Map<String, Map<String, String>> externalViewAssignment = externalView.getRecord().getMapFields();
 
-    // Get the online instances for the segments
+    Map<String, Set<String>> onlineInstancesMap = calculateOnlineInstancesMap(onlineSegments,
+        idealStateAssignment, externalViewAssignment, newSegmentCreationTimeMap);
+
+    Map<Set<String>, Set<String>> unavailableInstancesMap = calculateUnavailableInstancesMap(
+        onlineInstancesMap, idealStateAssignment);
+
+    populateSegmentMaps(onlineSegments, newSegmentCreationTimeMap, idealStateAssignment,
+        externalViewAssignment, onlineInstancesMap, unavailableInstancesMap);
+
+    if (LOGGER.isDebugEnabled()) {
+      LOGGER.debug("Got _newSegmentStateMap: {}, _oldSegmentCandidatesMap: {}", _newSegmentStateMap.keySet(),
+          _oldSegmentCandidatesMap.keySet());
+    }
+  }
+
+  private Map<String, Set<String>> calculateOnlineInstancesMap(Set<String> onlineSegments,
+      Map<String, Map<String, String>> idealStateAssignment,
+      Map<String, Map<String, String>> externalViewAssignment,
+      Map<String, Long> newSegmentCreationTimeMap) {
     Map<String, Set<String>> oldSegmentToOnlineInstancesMap =
         new HashMap<>(HashUtil.getHashMapCapacity(onlineSegments.size()));
-    Map<String, Set<String>> newSegmentToOnlineInstancesMap = new HashMap<>(newSegmentMapCapacity);
+    Map<String, Set<String>> newSegmentToOnlineInstancesMap =
+        new HashMap<>(HashUtil.getHashMapCapacity(newSegmentCreationTimeMap.size()));
     for (String segment : onlineSegments) {
       Map<String, String> idealStateInstanceStateMap = idealStateAssignment.get(segment);
       assert idealStateInstanceStateMap != null;
       Map<String, String> externalViewInstanceStateMap = externalViewAssignment.get(segment);
-      Set<String> onlineInstances;
-      if (externalViewInstanceStateMap == null) {
-        onlineInstances = Collections.emptySet();
-      } else {
-        onlineInstances = getOnlineInstances(idealStateInstanceStateMap, externalViewInstanceStateMap);
-      }
+      Set<String> onlineInstances = externalViewInstanceStateMap == null ? Collections.emptySet()
+          : getOnlineInstances(idealStateInstanceStateMap, externalViewInstanceStateMap);
       if (newSegmentCreationTimeMap.containsKey(segment)) {
         newSegmentToOnlineInstancesMap.put(segment, onlineInstances);
       } else {
         oldSegmentToOnlineInstancesMap.put(segment, onlineInstances);
       }
     }
+    oldSegmentToOnlineInstancesMap.putAll(newSegmentToOnlineInstancesMap);
+    return oldSegmentToOnlineInstancesMap;
+  }
 
-    // Calculate the unavailable instances based on the old segments' online instances for each combination of instances
-    // in the ideal state
+  private Map<Set<String>, Set<String>> calculateUnavailableInstancesMap(
+      Map<String, Set<String>> onlineInstancesMap, Map<String, Map<String, String>> idealStateAssignment) {
     Map<Set<String>, Set<String>> unavailableInstancesMap = new HashMap<>();
-    for (Map.Entry<String, Set<String>> entry : oldSegmentToOnlineInstancesMap.entrySet()) {
+    for (Map.Entry<String, Set<String>> entry : onlineInstancesMap.entrySet()) {
       String segment = entry.getKey();
       Set<String> onlineInstances = entry.getValue();
       Map<String, String> idealStateInstanceStateMap = idealStateAssignment.get(segment);
@@ -137,45 +155,45 @@ public class StrictReplicaGroupInstanceSelector extends ReplicaGroupInstanceSele
             LOGGER.warn(
                 "Found unavailable instance: {} in instance group: {} for segment: {}, table: {} (IS: {}, EV: {})",
                 instance, instancesInIdealState, segment, _tableNameWithType, idealStateInstanceStateMap,
-                externalViewAssignment.get(segment));
+                idealStateAssignment.get(segment));
           }
         }
       }
     }
+    return unavailableInstancesMap;
+  }
 
-    // Iterate over the maps and exclude the unavailable instances
-    for (Map.Entry<String, Set<String>> entry : oldSegmentToOnlineInstancesMap.entrySet()) {
-      String segment = entry.getKey();
-      // NOTE: onlineInstances is either a TreeSet or an EmptySet (sorted)
-      Set<String> onlineInstances = entry.getValue();
-      Map<String, String> idealStateInstanceStateMap = idealStateAssignment.get(segment);
-      Set<String> unavailableInstances = unavailableInstancesMap.get(idealStateInstanceStateMap.keySet());
-      List<SegmentInstanceCandidate> candidates = new ArrayList<>(onlineInstances.size());
-      for (String instance : onlineInstances) {
-        if (!unavailableInstances.contains(instance)) {
-          candidates.add(new SegmentInstanceCandidate(instance, true));
-        }
-      }
-      _oldSegmentCandidatesMap.put(segment, candidates);
-    }
-
-    for (Map.Entry<String, Set<String>> entry : newSegmentToOnlineInstancesMap.entrySet()) {
-      String segment = entry.getKey();
-      Set<String> onlineInstances = entry.getValue();
+  private void populateSegmentMaps(Set<String> onlineSegments,
+      Map<String, Long> newSegmentCreationTimeMap, Map<String, Map<String, String>> idealStateAssignment,
+      Map<String, Map<String, String>> externalViewAssignment,
+      Map<String, Set<String>> onlineInstancesMap,
+      Map<Set<String>, Set<String>> unavailableInstancesMap) {
+    for (String segment : onlineSegments) {
+      Set<String> onlineInstances = onlineInstancesMap.get(segment);
       Map<String, String> idealStateInstanceStateMap = idealStateAssignment.get(segment);
       Set<String> unavailableInstances =
           unavailableInstancesMap.getOrDefault(idealStateInstanceStateMap.keySet(), Collections.emptySet());
-      List<SegmentInstanceCandidate> candidates = new ArrayList<>(idealStateInstanceStateMap.size());
-      for (String instance : convertToSortedMap(idealStateInstanceStateMap).keySet()) {
-        if (!unavailableInstances.contains(instance)) {
-          candidates.add(new SegmentInstanceCandidate(instance, onlineInstances.contains(instance)));
+      if (newSegmentCreationTimeMap.containsKey(segment)) {
+        List<SegmentInstanceCandidate> candidates = new ArrayList<>(idealStateInstanceStateMap.size());
+        for (String instance : convertToSortedMap(idealStateInstanceStateMap).keySet()) {
+          if (!unavailableInstances.contains(instance)) {
+            candidates.add(
+                new SegmentInstanceCandidate(instance, onlineInstances.contains(instance)));
+          }
         }
+        _newSegmentStateMap.put(segment,
+            new NewSegmentState(newSegmentCreationTimeMap.get(segment), candidates));
+      } else {
+        // NOTE: onlineInstances is either a TreeSet or an EmptySet (sorted)
+        List<SegmentInstanceCandidate> candidates = new ArrayList<>(onlineInstances.size());
+        for (String instance : onlineInstances) {
+          if (!unavailableInstances.contains(instance)) {
+            candidates.add(new SegmentInstanceCandidate(instance, true));
+          }
+        }
+        _oldSegmentCandidatesMap.put(segment, candidates);
       }
-      _newSegmentStateMap.put(segment, new NewSegmentState(newSegmentCreationTimeMap.get(segment), candidates));
-    }
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Got _newSegmentStateMap: {}, _oldSegmentCandidatesMap: {}", _newSegmentStateMap.keySet(),
-          _oldSegmentCandidatesMap.keySet());
     }
   }
+//Refactoring end
 }

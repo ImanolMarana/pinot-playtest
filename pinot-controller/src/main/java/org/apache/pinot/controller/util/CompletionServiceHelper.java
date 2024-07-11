@@ -115,50 +115,72 @@ public class CompletionServiceHelper {
   }
 
   private CompletionServiceResponse collectResponse(String tableNameWithType, int size,
-      CompletionService<MultiHttpRequestResponse> completionService, boolean multiRequestPerServer,
-      @Nullable String useCase) {
-    CompletionServiceResponse completionServiceResponse = new CompletionServiceResponse();
+    CompletionService<MultiHttpRequestResponse> completionService, boolean multiRequestPerServer,
+    @Nullable String useCase) {
+  CompletionServiceResponse completionServiceResponse = new CompletionServiceResponse();
 
-    for (int i = 0; i < size; i++) {
-      MultiHttpRequestResponse multiHttpRequestResponse = null;
-      try {
-        multiHttpRequestResponse = completionService.take().get();
-        URI uri = multiHttpRequestResponse.getURI();
-        String instance =
-            _endpointsToServers.get(String.format("%s://%s:%d", uri.getScheme(), uri.getHost(), uri.getPort()));
-        int statusCode = multiHttpRequestResponse.getResponse().getStatusLine().getStatusCode();
-        if (statusCode >= 300) {
-          String reason = multiHttpRequestResponse.getResponse().getStatusLine().getReasonPhrase();
-          LOGGER.error("Server: {} returned error: {}, reason: {}", instance, statusCode, reason);
-          completionServiceResponse._failedResponseCount++;
-          continue;
-        }
-        String responseString = EntityUtils.toString(multiHttpRequestResponse.getResponse().getEntity());
-        completionServiceResponse._httpResponses
-            .put(multiRequestPerServer ? uri.toString() : instance, responseString);
-      } catch (Exception e) {
-        String reason = useCase == null ? "" : String.format(" in '%s'", useCase);
-        LOGGER.error("Connection error {}. Details: {}", reason, e.getMessage());
-        completionServiceResponse._failedResponseCount++;
-      } finally {
-        if (multiHttpRequestResponse != null) {
-          try {
-            multiHttpRequestResponse.close();
-          } catch (Exception e) {
-            LOGGER.error("Connection close error. Details: {}", e.getMessage());
-          }
-        }
-      }
+  for (int i = 0; i < size; i++) {
+    try {
+      MultiHttpRequestResponse multiHttpRequestResponse = completionService.take().get();
+      processResponse(multiHttpRequestResponse, completionServiceResponse, multiRequestPerServer, useCase);
+    } catch (Exception e) {
+      String reason = useCase == null ? "" : String.format(" in '%s'", useCase);
+      LOGGER.error("Connection error {}. Details: {}", reason, e.getMessage());
+      completionServiceResponse._failedResponseCount++;
     }
+  }
 
-    int numServersResponded = completionServiceResponse._httpResponses.size();
-    if (numServersResponded != size) {
-      LOGGER.warn("Finished reading information for table: {} with {}/{} server responses", tableNameWithType,
-          numServersResponded, size);
-    } else {
-      LOGGER.info("Finished reading information for table: {}", tableNameWithType);
+  logCompletionStatus(tableNameWithType, completionServiceResponse, size);
+  return completionServiceResponse;
+}
+
+private void processResponse(MultiHttpRequestResponse multiHttpRequestResponse,
+    CompletionServiceResponse completionServiceResponse, boolean multiRequestPerServer, @Nullable String useCase) {
+  try {
+    URI uri = multiHttpRequestResponse.getURI();
+    String instance =
+        _endpointsToServers.get(String.format("%s://%s:%d", uri.getScheme(), uri.getHost(), uri.getPort()));
+    int statusCode = multiHttpRequestResponse.getResponse().getStatusLine().getStatusCode();
+    if (statusCode >= 300) {
+      String reason = multiHttpRequestResponse.getResponse().getStatusLine().getReasonPhrase();
+      LOGGER.error("Server: {} returned error: {}, reason: {}", instance, statusCode, reason);
+      completionServiceResponse._failedResponseCount++;
+      return;
     }
-    return completionServiceResponse;
+    String responseString = EntityUtils.toString(multiHttpRequestResponse.getResponse().getEntity());
+    completionServiceResponse._httpResponses
+        .put(multiRequestPerServer ? uri.toString() : instance, responseString);
+  } catch (Exception e) {
+    String reason = useCase == null ? "" : String.format(" in '%s'", useCase);
+    LOGGER.error("Error processing response {}. Details: {}", reason, e.getMessage());
+    completionServiceResponse._failedResponseCount++;
+  } finally {
+    closeResponse(multiHttpRequestResponse);
+  }
+}
+
+private void closeResponse(MultiHttpRequestResponse multiHttpRequestResponse) {
+  if (multiHttpRequestResponse != null) {
+    try {
+      multiHttpRequestResponse.close();
+    } catch (Exception e) {
+      LOGGER.error("Connection close error. Details: {}", e.getMessage());
+    }
+  }
+}
+
+private void logCompletionStatus(String tableNameWithType, CompletionServiceResponse completionServiceResponse,
+    int totalResponses) {
+  int numServersResponded = completionServiceResponse._httpResponses.size();
+  if (numServersResponded != totalResponses) {
+    LOGGER.warn("Finished reading information for table: {} with {}/{} server responses", tableNameWithType,
+        numServersResponded, totalResponses);
+  } else {
+    LOGGER.info("Finished reading information for table: {}", tableNameWithType);
+  }
+}
+
+//Refactoring end
   }
 
   public CompletionServiceResponse doMultiGetRequest(List<String> serverURLs, String tableNameWithType,

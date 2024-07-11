@@ -880,10 +880,17 @@ public class CaseTransformFunction extends ComputeDifferentlyWhenNullHandlingEna
   public RoaringBitmap getNullBitmap(ValueBlock valueBlock) {
     int[] selected = getSelectedArray(valueBlock, true);
     int numDocs = valueBlock.getNumDocs();
+    final RoaringBitmap bitmap = new RoaringBitmap();
+    
+    processThenStatements(valueBlock, selected, numDocs, bitmap);
+
+    return processElseStatement(valueBlock, selected, numDocs, bitmap);
+  }
+
+  private void processThenStatements(ValueBlock valueBlock, int[] selected, int numDocs, RoaringBitmap bitmap) {
     int numThenStatements = _thenStatements.size();
     BitSet unselectedDocs = new BitSet();
     unselectedDocs.set(0, numDocs);
-    final RoaringBitmap bitmap = new RoaringBitmap();
     Map<Integer, RoaringBitmap> thenStatementsIndexToValues = new HashMap<>();
     for (int i = 0; i < numThenStatements; i++) {
       if (_computeThenStatements[i]) {
@@ -899,14 +906,21 @@ public class CaseTransformFunction extends ComputeDifferentlyWhenNullHandlingEna
         unselectedDocs.clear(docId);
       }
     }
+  }
+  
+  private RoaringBitmap processElseStatement(ValueBlock valueBlock, int[] selected, int numDocs, RoaringBitmap bitmap) {
+    BitSet unselectedDocs = new BitSet();
+    unselectedDocs.set(0, numDocs);
     if (!unselectedDocs.isEmpty()) {
       if (_elseStatement == null) {
-        for (int docId = unselectedDocs.nextSetBit(0); docId >= 0; docId = unselectedDocs.nextSetBit(docId + 1)) {
+        for (int docId = unselectedDocs.nextSetBit(0); docId >= 0; docId =
+            unselectedDocs.nextSetBit(docId + 1)) {
           bitmap.add(docId);
         }
       } else {
         RoaringBitmap nullBitmap = _elseStatement.getNullBitmap(valueBlock);
-        for (int docId = unselectedDocs.nextSetBit(0); docId >= 0; docId = unselectedDocs.nextSetBit(docId + 1)) {
+        for (int docId = unselectedDocs.nextSetBit(0); docId >= 0; docId =
+            unselectedDocs.nextSetBit(docId + 1)) {
           if (nullBitmap != null && nullBitmap.contains(docId)) {
             bitmap.add(docId);
           }
@@ -917,5 +931,8 @@ public class CaseTransformFunction extends ComputeDifferentlyWhenNullHandlingEna
       return null;
     }
     return bitmap;
+  }
+
+//Refactoring end
   }
 }

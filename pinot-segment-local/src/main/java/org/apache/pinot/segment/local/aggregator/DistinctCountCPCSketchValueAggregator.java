@@ -151,30 +151,52 @@ public class DistinctCountCPCSketchValueAggregator implements ValueAggregator<Ob
 
   private void addObjectsToSketch(Object[] rawValues, CpcSketch sketch) {
     if (rawValues instanceof String[]) {
-      for (String s : (String[]) rawValues) {
-        sketch.update(s);
-      }
+      updateSketchWithStringArray((String[]) rawValues, sketch);
     } else if (rawValues instanceof Integer[]) {
-      for (Integer i : (Integer[]) rawValues) {
-        sketch.update(i);
-      }
+      updateSketchWithIntArray((Integer[]) rawValues, sketch);
     } else if (rawValues instanceof Long[]) {
-      for (Long l : (Long[]) rawValues) {
-        sketch.update(l);
-      }
+      updateSketchWithLongArray((Long[]) rawValues, sketch);
     } else if (rawValues instanceof Double[]) {
-      for (Double d : (Double[]) rawValues) {
-        sketch.update(d);
-      }
+      updateSketchWithDoubleArray((Double[]) rawValues, sketch);
     } else if (rawValues instanceof Float[]) {
-      for (Float f : (Float[]) rawValues) {
-        sketch.update(f);
-      }
+      updateSketchWithFloatArray((Float[]) rawValues, sketch);
     } else {
       throw new IllegalStateException(
           "Unsupported data type for CPC Sketch aggregation: " + rawValues.getClass().getSimpleName());
     }
   }
+
+  private void updateSketchWithStringArray(String[] stringValues, CpcSketch sketch) {
+    for (String s : stringValues) {
+      sketch.update(s);
+    }
+  }
+
+  private void updateSketchWithIntArray(Integer[] intValues, CpcSketch sketch) {
+    for (Integer i : intValues) {
+      sketch.update(i);
+    }
+  }
+
+  private void updateSketchWithLongArray(Long[] longValues, CpcSketch sketch) {
+    for (Long l : longValues) {
+      sketch.update(l);
+    }
+  }
+
+  private void updateSketchWithDoubleArray(Double[] doubleValues, CpcSketch sketch) {
+    for (Double d : doubleValues) {
+      sketch.update(d);
+    }
+  }
+
+  private void updateSketchWithFloatArray(Float[] floatValues, CpcSketch sketch) {
+    for (Float f : floatValues) {
+      sketch.update(f);
+    }
+  }
+
+//Refactoring end
 
   private CpcUnion extractUnion(Object value) {
     if (value == null) {

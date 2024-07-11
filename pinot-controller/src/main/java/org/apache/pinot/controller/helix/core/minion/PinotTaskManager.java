@@ -609,30 +609,40 @@ public class PinotTaskManager extends ControllerPeriodicTask<Void> {
    */
   @Nullable
   private List<String> scheduleTask(PinotTaskGenerator taskGenerator, List<TableConfig> enabledTableConfigs,
-      boolean isLeader, @Nullable String minionInstanceTagForTask) {
-    LOGGER.info("Trying to schedule task type: {}, isLeader: {}", taskGenerator.getTaskType(), isLeader);
-    Map<String, List<PinotTaskConfig>> minionInstanceTagToTaskConfigs = new HashMap<>();
-    String taskType = taskGenerator.getTaskType();
-    for (TableConfig tableConfig : enabledTableConfigs) {
-      String tableName = tableConfig.getTableName();
-      try {
-        String minionInstanceTag = minionInstanceTagForTask != null ? minionInstanceTagForTask
-            : taskGenerator.getMinionInstanceTag(tableConfig);
-        List<PinotTaskConfig> presentTaskConfig =
-            minionInstanceTagToTaskConfigs.computeIfAbsent(minionInstanceTag, k -> new ArrayList<>());
-        taskGenerator.generateTasks(List.of(tableConfig), presentTaskConfig);
-        minionInstanceTagToTaskConfigs.put(minionInstanceTag, presentTaskConfig);
-        long successRunTimestamp = System.currentTimeMillis();
-        _taskManagerStatusCache.saveTaskGeneratorInfo(tableName, taskType,
-            taskGeneratorMostRecentRunInfo -> taskGeneratorMostRecentRunInfo.addSuccessRunTs(successRunTimestamp));
-        // before the first task schedule, the follow two gauge metrics will be empty
-        // TODO: find a better way to report task generation information
-        _controllerMetrics.setOrUpdateTableGauge(tableName, taskType,
-            ControllerGauge.TIME_MS_SINCE_LAST_SUCCESSFUL_MINION_TASK_GENERATION,
-            () -> System.currentTimeMillis() - successRunTimestamp);
-        _controllerMetrics.setOrUpdateTableGauge(tableName, taskType,
-            ControllerGauge.LAST_MINION_TASK_GENERATION_ENCOUNTERS_ERROR, 0L);
-      } catch (Exception e) {
+          boolean isLeader, @Nullable String minionInstanceTagForTask) {
+        LOGGER.info("Trying to schedule task type: {}, isLeader: {}", taskGenerator.getTaskType(), isLeader);
+        Map<String, List<PinotTaskConfig>> minionInstanceTagToTaskConfigs = new HashMap<>();
+        String taskType = taskGenerator.getTaskType();
+        for (TableConfig tableConfig : enabledTableConfigs) {
+          String tableName = tableConfig.getTableName();
+          try {
+            String minionInstanceTag = minionInstanceTagForTask != null ? minionInstanceTagForTask
+                : taskGenerator.getMinionInstanceTag(tableConfig);
+            List<PinotTaskConfig> presentTaskConfig =
+                minionInstanceTagToTaskConfigs.computeIfAbsent(minionInstanceTag, k -> new ArrayList<>());
+            taskGenerator.generateTasks(List.of(tableConfig), presentTaskConfig);
+            minionInstanceTagToTaskConfigs.put(minionInstanceTag, presentTaskConfig);
+            long successRunTimestamp = System.currentTimeMillis();
+            _taskManagerStatusCache.saveTaskGeneratorInfo(tableName, taskType,
+                taskGeneratorMostRecentRunInfo -> taskGeneratorMostRecentRunInfo.addSuccessRunTs(successRunTimestamp));
+            // before the first task schedule, the follow two gauge metrics will be empty
+            // TODO: find a better way to report task generation information
+            _controllerMetrics.setOrUpdateTableGauge(tableName, taskType,
+                ControllerGauge.TIME_MS_SINCE_LAST_SUCCESSFUL_MINION_TASK_GENERATION,
+                () -> System.currentTimeMillis() - successRunTimestamp);
+            _controllerMetrics.setOrUpdateTableGauge(tableName, taskType,
+                ControllerGauge.LAST_MINION_TASK_GENERATION_ENCOUNTERS_ERROR, 0L);
+          } catch (Exception e) {
+            handleTaskGenerationError(tableName, taskType, e);
+          }
+        }
+        if (!isLeader) {
+          taskGenerator.nonLeaderCleanUp();
+        }
+        return submitTasks(taskType, minionInstanceTagToTaskConfigs, taskGenerator);
+      }
+    
+      private void handleTaskGenerationError(String tableName, String taskType, Exception e) {
         StringWriter errors = new StringWriter();
         try (PrintWriter pw = new PrintWriter(errors)) {
           e.printStackTrace(pw);
@@ -647,46 +657,49 @@ public class PinotTaskManager extends ControllerPeriodicTask<Void> {
             ControllerGauge.LAST_MINION_TASK_GENERATION_ENCOUNTERS_ERROR, 1L);
         LOGGER.error("Failed to generate tasks for task type {} for table {}", taskType, tableName, e);
       }
-    }
-    if (!isLeader) {
-      taskGenerator.nonLeaderCleanUp();
-    }
-    int numErrorTasksScheduled = 0;
-    List<String> submittedTaskNames = new ArrayList<>();
-    for (String minionInstanceTag : minionInstanceTagToTaskConfigs.keySet()) {
-      List<PinotTaskConfig> pinotTaskConfigs = minionInstanceTagToTaskConfigs.get(minionInstanceTag);
-      int numTasks = pinotTaskConfigs.size();
-      try {
-        if (numTasks > 0) {
-          if (_pinotHelixResourceManager.getInstancesWithTag(minionInstanceTag).isEmpty()) {
-            LOGGER.error("Skipping {} tasks for task type: {} with task configs: {} to invalid minionInstanceTag: {}",
-                numTasks, taskType, pinotTaskConfigs, minionInstanceTag);
-            throw new IllegalArgumentException("No valid minion instance found for tag: " + minionInstanceTag);
+    
+      @Nullable
+      private List<String> submitTasks(String taskType,
+          Map<String, List<PinotTaskConfig>> minionInstanceTagToTaskConfigs, PinotTaskGenerator taskGenerator) {
+        int numErrorTasksScheduled = 0;
+        List<String> submittedTaskNames = new ArrayList<>();
+        for (String minionInstanceTag : minionInstanceTagToTaskConfigs.keySet()) {
+          List<PinotTaskConfig> pinotTaskConfigs = minionInstanceTagToTaskConfigs.get(minionInstanceTag);
+          int numTasks = pinotTaskConfigs.size();
+          try {
+            if (numTasks > 0) {
+              if (_pinotHelixResourceManager.getInstancesWithTag(minionInstanceTag).isEmpty()) {
+                LOGGER.error("Skipping {} tasks for task type: {} with task configs: {} to invalid minionInstanceTag: {}",
+                    numTasks, taskType, pinotTaskConfigs, minionInstanceTag);
+                throw new IllegalArgumentException("No valid minion instance found for tag: " + minionInstanceTag);
+              }
+              // This might lead to lot of logs, maybe sum it up and move outside the loop
+              LOGGER.info("Submitting {} tasks for task type: {} to minionInstance: {} with task configs: {}", numTasks,
+                  taskType, minionInstanceTag, pinotTaskConfigs);
+              String submittedTaskName =
+                  _helixTaskResourceManager.submitTask(pinotTaskConfigs, minionInstanceTag,
+                      taskGenerator.getTaskTimeoutMs(), taskGenerator.getNumConcurrentTasksPerInstance(),
+                      taskGenerator.getMaxAttemptsPerTask());
+              submittedTaskNames.add(submittedTaskName);
+              _controllerMetrics.addMeteredTableValue(taskType, ControllerMeter.NUMBER_TASKS_SUBMITTED, numTasks);
+            }
+          } catch (Exception e) {
+            numErrorTasksScheduled++;
+            LOGGER.error("Failed to schedule task type {} on minion instance {} with task configs: {}", taskType,
+                minionInstanceTag, pinotTaskConfigs, e);
           }
-          // This might lead to lot of logs, maybe sum it up and move outside the loop
-          LOGGER.info("Submitting {} tasks for task type: {} to minionInstance: {} with task configs: {}", numTasks,
-              taskType, minionInstanceTag, pinotTaskConfigs);
-          String submittedTaskName = _helixTaskResourceManager.submitTask(pinotTaskConfigs, minionInstanceTag,
-              taskGenerator.getTaskTimeoutMs(), taskGenerator.getNumConcurrentTasksPerInstance(),
-              taskGenerator.getMaxAttemptsPerTask());
-          submittedTaskNames.add(submittedTaskName);
-          _controllerMetrics.addMeteredTableValue(taskType, ControllerMeter.NUMBER_TASKS_SUBMITTED, numTasks);
         }
-      } catch (Exception e) {
-        numErrorTasksScheduled++;
-        LOGGER.error("Failed to schedule task type {} on minion instance {} with task configs: {}", taskType,
-            minionInstanceTag, pinotTaskConfigs, e);
+        if (numErrorTasksScheduled > 0) {
+          LOGGER.warn("Failed to schedule {} tasks for task type type {}", numErrorTasksScheduled, taskType);
+        }
+        // No job got scheduled
+        if (numErrorTasksScheduled == minionInstanceTagToTaskConfigs.size() || submittedTaskNames.isEmpty()) {
+          return null;
+        }
+        // atleast one job got scheduled
+        return submittedTaskNames;
       }
-    }
-    if (numErrorTasksScheduled > 0) {
-      LOGGER.warn("Failed to schedule {} tasks for task type type {}", numErrorTasksScheduled, taskType);
-    }
-    // No job got scheduled
-    if (numErrorTasksScheduled == minionInstanceTagToTaskConfigs.size() || submittedTaskNames.isEmpty()) {
-      return null;
-    }
-    // atleast one job got scheduled
-    return submittedTaskNames;
+      //Refactoring end
   }
 
   @Override

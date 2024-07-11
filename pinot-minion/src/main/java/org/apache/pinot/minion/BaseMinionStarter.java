@@ -193,40 +193,76 @@ public abstract class BaseMinionStarter implements ServiceStartable {
     Utils.logVersions();
     MinionContext minionContext = MinionContext.getInstance();
 
-    // Initialize data directory
-    LOGGER.info("Initializing data directory");
-    File dataDir = new File(_config.getProperty(CommonConstants.Helix.Instance.DATA_DIR_KEY,
-        CommonConstants.Minion.DEFAULT_INSTANCE_DATA_DIR));
-    if (dataDir.exists()) {
-      FileUtils.cleanDirectory(dataDir);
-    } else {
-      FileUtils.forceMkdir(dataDir);
-    }
-    minionContext.setDataDir(dataDir);
-
-    // Initialize metrics
-    LOGGER.info("Initializing metrics");
-    // TODO: put all the metrics related configs down to "pinot.server.metrics"
-    PinotMetricsRegistry metricsRegistry = PinotMetricUtils.getPinotMetricsRegistry(_config.getMetricsConfig());
-
-    MinionMetrics minionMetrics = new MinionMetrics(_config.getMetricsPrefix(), metricsRegistry);
-    minionMetrics.initializeGlobalMeters();
-    minionMetrics.setValueOfGlobalGauge(MinionGauge.VERSION, PinotVersion.VERSION_METRIC_NAME, 1);
-    MinionMetrics.register(minionMetrics);
-    minionContext.setMinionMetrics(minionMetrics);
-
-    // Install default SSL context if necessary (even if not force-enabled everywhere)
-    TlsConfig tlsDefaults = TlsUtils.extractTlsConfig(_config, CommonConstants.Minion.MINION_TLS_PREFIX);
-    if (StringUtils.isNotBlank(tlsDefaults.getKeyStorePath()) || StringUtils.isNotBlank(
-        tlsDefaults.getTrustStorePath())) {
-      LOGGER.info("Installing default SSL context for any client requests");
-      TlsUtils.installDefaultSSLSocketFactory(tlsDefaults);
-    }
-
-    // initialize authentication
+    initDataDirectory(minionContext);
+    initMetrics(minionContext);
+    installDefaultSSLContextIfNecessary();
     minionContext.setTaskAuthProvider(
         AuthProviderUtils.extractAuthProvider(_config, CommonConstants.Minion.CONFIG_TASK_AUTH_NAMESPACE));
 
+    startComponents(minionContext);
+    joinHelixCluster(minionContext);
+    startMinionAdminApplication();
+    initHealthCheckCallback();
+
+    LOGGER.info("Pinot minion started");
+  }
+
+  private void initHealthCheckCallback() {
+    LOGGER.info("Initializing health check callback");
+    ServiceStatus.setServiceStatusCallback(_instanceId, new ServiceStatus.ServiceStatusCallback() {
+      private volatile boolean _isStarted = false;
+      private volatile String _statusDescription = "Helix ZK Not connected as " + _helixManager.getInstanceType();
+
+      @Override
+      public ServiceStatus.Status getServiceStatus() {
+        // TODO: add health check here
+        minionMetrics.addMeteredGlobalValue(MinionMeter.HEALTH_CHECK_GOOD_CALLS, 1L);
+        if (_isStarted) {
+          if (_helixManager.isConnected()) {
+            return ServiceStatus.Status.GOOD;
+          } else {
+            return ServiceStatus.Status.BAD;
+          }
+        }
+
+        if (!_helixManager.isConnected()) {
+          return ServiceStatus.Status.STARTING;
+        } else {
+          _isStarted = true;
+          _statusDescription = ServiceStatus.STATUS_DESCRIPTION_NONE;
+          return ServiceStatus.Status.GOOD;
+        }
+      }
+
+      @Override
+      public String getStatusDescription() {
+        return _statusDescription;
+      }
+    });
+  }
+
+  private void startMinionAdminApplication() {
+    LOGGER.info("Starting minion admin application on: {}", ListenerConfigUtil.toString(_listenerConfigs));
+    _minionAdminApplication = new MinionAdminApiApplication(_instanceId, _config);
+    _minionAdminApplication.start(_listenerConfigs);
+  }
+
+  private void joinHelixCluster(MinionContext minionContext) {
+    // Join the Helix cluster
+    LOGGER.info("Joining the Helix cluster");
+    _helixManager.getStateMachineEngine()
+        .registerStateModelFactory("Task", new TaskStateModelFactory(_helixManager,
+            new TaskFactoryRegistry(_taskExecutorFactoryRegistry, _eventObserverFactoryRegistry)
+                .getTaskFactoryRegistry()));
+    _helixManager.connect();
+    updateInstanceConfigIfNeeded();
+    minionMetrics.setOrUpdateGauge(CommonConstants.Helix.INSTANCE_CONNECTED_METRIC_NAME,
+        () -> _helixManager.isConnected() ? 1L : 0L);
+    minionContext.setHelixPropertyStore(_helixManager.getHelixPropertyStore());
+    minionContext.setHelixManager(_helixManager);
+  }
+
+  private void startComponents(MinionContext minionContext) {
     // Start all components
     LOGGER.info("Initializing PinotFSFactory");
     PinotConfiguration pinotFSConfig = _config.subset(CommonConstants.Minion.PREFIX_OF_CONFIG_OF_PINOT_FS_FACTORY);
@@ -267,55 +303,46 @@ public abstract class BaseMinionStarter implements ServiceStartable {
           new ClientSSLContextGenerator(httpsConfig.subset(CommonConstants.PREFIX_OF_SSL_SUBSET)).generate();
       minionContext.setSSLContext(sslContext);
     }
+  }
 
-    // Join the Helix cluster
-    LOGGER.info("Joining the Helix cluster");
-    _helixManager.getStateMachineEngine().registerStateModelFactory("Task", new TaskStateModelFactory(_helixManager,
-        new TaskFactoryRegistry(_taskExecutorFactoryRegistry, _eventObserverFactoryRegistry).getTaskFactoryRegistry()));
-    _helixManager.connect();
-    updateInstanceConfigIfNeeded();
-    minionMetrics.setOrUpdateGauge(CommonConstants.Helix.INSTANCE_CONNECTED_METRIC_NAME,
-            () -> _helixManager.isConnected() ? 1L : 0L);
-    minionContext.setHelixPropertyStore(_helixManager.getHelixPropertyStore());
-    minionContext.setHelixManager(_helixManager);
-    LOGGER.info("Starting minion admin application on: {}", ListenerConfigUtil.toString(_listenerConfigs));
-    _minionAdminApplication = new MinionAdminApiApplication(_instanceId, _config);
-    _minionAdminApplication.start(_listenerConfigs);
+  private void installDefaultSSLContextIfNecessary() {
+    // Install default SSL context if necessary (even if not force-enabled everywhere)
+    TlsConfig tlsDefaults = TlsUtils.extractTlsConfig(_config, CommonConstants.Minion.MINION_TLS_PREFIX);
+    if (StringUtils.isNotBlank(tlsDefaults.getKeyStorePath()) || StringUtils.isNotBlank(
+        tlsDefaults.getTrustStorePath())) {
+      LOGGER.info("Installing default SSL context for any client requests");
+      TlsUtils.installDefaultSSLSocketFactory(tlsDefaults);
+    }
+  }
 
-    // Initialize health check callback
-    LOGGER.info("Initializing health check callback");
-    ServiceStatus.setServiceStatusCallback(_instanceId, new ServiceStatus.ServiceStatusCallback() {
-      private volatile boolean _isStarted = false;
-      private volatile String _statusDescription = "Helix ZK Not connected as " + _helixManager.getInstanceType();
+  private void initMetrics(MinionContext minionContext) {
+    // Initialize metrics
+    LOGGER.info("Initializing metrics");
+    // TODO: put all the metrics related configs down to "pinot.server.metrics"
+    PinotMetricsRegistry metricsRegistry = PinotMetricUtils.getPinotMetricsRegistry(_config.getMetricsConfig());
 
-      @Override
-      public ServiceStatus.Status getServiceStatus() {
-        // TODO: add health check here
-        minionMetrics.addMeteredGlobalValue(MinionMeter.HEALTH_CHECK_GOOD_CALLS, 1L);
-        if (_isStarted) {
-          if (_helixManager.isConnected()) {
-            return ServiceStatus.Status.GOOD;
-          } else {
-            return ServiceStatus.Status.BAD;
-          }
-        }
+    MinionMetrics minionMetrics = new MinionMetrics(_config.getMetricsPrefix(), metricsRegistry);
+    minionMetrics.initializeGlobalMeters();
+    minionMetrics.setValueOfGlobalGauge(MinionGauge.VERSION, PinotVersion.VERSION_METRIC_NAME, 1);
+    MinionMetrics.register(minionMetrics);
+    minionContext.setMinionMetrics(minionMetrics);
+  }
 
-        if (!_helixManager.isConnected()) {
-          return ServiceStatus.Status.STARTING;
-        } else {
-          _isStarted = true;
-          _statusDescription = ServiceStatus.STATUS_DESCRIPTION_NONE;
-          return ServiceStatus.Status.GOOD;
-        }
-      }
+  private void initDataDirectory(MinionContext minionContext)
+      throws IOException {
+    // Initialize data directory
+    LOGGER.info("Initializing data directory");
+    File dataDir = new File(_config.getProperty(CommonConstants.Helix.Instance.DATA_DIR_KEY,
+        CommonConstants.Minion.DEFAULT_INSTANCE_DATA_DIR));
+    if (dataDir.exists()) {
+      FileUtils.cleanDirectory(dataDir);
+    } else {
+      FileUtils.forceMkdir(dataDir);
+    }
+    minionContext.setDataDir(dataDir);
+  }
 
-      @Override
-      public String getStatusDescription() {
-        return _statusDescription;
-      }
-    });
-
-    LOGGER.info("Pinot minion started");
+//Refactoring end
   }
 
   /**

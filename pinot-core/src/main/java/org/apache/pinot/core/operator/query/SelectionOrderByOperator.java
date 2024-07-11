@@ -144,37 +144,56 @@ public class SelectionOrderByOperator extends BaseOperator<SelectionResultsBlock
     int numColumnsProjected = _projectOperator.getNumColumnsProjected();
     ValueBlock valueBlock;
     while ((valueBlock = _projectOperator.nextBlock()) != null) {
-      for (int i = 0; i < numExpressions; i++) {
-        ExpressionContext expression = _expressions.get(i);
-        blockValSets[i] = valueBlock.getBlockValueSet(expression);
-      }
-      RowBasedBlockValueFetcher blockValueFetcher = new RowBasedBlockValueFetcher(blockValSets);
-      int numDocsFetched = valueBlock.getNumDocs();
-      if (_nullHandlingEnabled) {
-        RoaringBitmap[] nullBitmaps = new RoaringBitmap[numExpressions];
-        for (int i = 0; i < numExpressions; i++) {
-          nullBitmaps[i] = blockValSets[i].getNullBitmap();
-        }
-        for (int rowId = 0; rowId < numDocsFetched; rowId++) {
-          // Note: Everytime blockValueFetcher.getRow is called, a new row instance is created.
-          Object[] row = blockValueFetcher.getRow(rowId);
-          for (int colId = 0; colId < numExpressions; colId++) {
-            if (nullBitmaps[colId] != null && nullBitmaps[colId].contains(rowId)) {
-              row[colId] = null;
-            }
-          }
-          SelectionOperatorUtils.addToPriorityQueue(row, _rows, _numRowsToKeep);
-        }
-      } else {
-        for (int i = 0; i < numDocsFetched; i++) {
-          SelectionOperatorUtils.addToPriorityQueue(blockValueFetcher.getRow(i), _rows, _numRowsToKeep);
-        }
-      }
-      _numDocsScanned += numDocsFetched;
+      processValueBlock(blockValSets, numExpressions, valueBlock);
+      _numDocsScanned += valueBlock.getNumDocs();
     }
     _numEntriesScannedPostFilter = (long) _numDocsScanned * numColumnsProjected;
 
     // Create the data schema
+    DataSchema dataSchema = createDataSchema(numExpressions);
+
+    return new SelectionResultsBlock(dataSchema, getSortedRows(), _comparator, _queryContext);
+  }
+
+  private void processValueBlock(BlockValSet[] blockValSets, int numExpressions, ValueBlock valueBlock) {
+    for (int i = 0; i < numExpressions; i++) {
+      ExpressionContext expression = _expressions.get(i);
+      blockValSets[i] = valueBlock.getBlockValueSet(expression);
+    }
+    RowBasedBlockValueFetcher blockValueFetcher = new RowBasedBlockValueFetcher(blockValSets);
+    int numDocsFetched = valueBlock.getNumDocs();
+    if (_nullHandlingEnabled) {
+      processValueBlockWithNullHandling(blockValSets, numExpressions, blockValueFetcher, numDocsFetched);
+    } else {
+      processValueBlockWithoutNullHandling(blockValueFetcher, numDocsFetched);
+    }
+  }
+
+  private void processValueBlockWithNullHandling(BlockValSet[] blockValSets, int numExpressions,
+      RowBasedBlockValueFetcher blockValueFetcher, int numDocsFetched) {
+    RoaringBitmap[] nullBitmaps = new RoaringBitmap[numExpressions];
+    for (int i = 0; i < numExpressions; i++) {
+      nullBitmaps[i] = blockValSets[i].getNullBitmap();
+    }
+    for (int rowId = 0; rowId < numDocsFetched; rowId++) {
+      // Note: Everytime blockValueFetcher.getRow is called, a new row instance is created.
+      Object[] row = blockValueFetcher.getRow(rowId);
+      for (int colId = 0; colId < numExpressions; colId++) {
+        if (nullBitmaps[colId] != null && nullBitmaps[colId].contains(rowId)) {
+          row[colId] = null;
+        }
+      }
+      SelectionOperatorUtils.addToPriorityQueue(row, _rows, _numRowsToKeep);
+    }
+  }
+
+  private void processValueBlockWithoutNullHandling(RowBasedBlockValueFetcher blockValueFetcher, int numDocsFetched) {
+    for (int i = 0; i < numDocsFetched; i++) {
+      SelectionOperatorUtils.addToPriorityQueue(blockValueFetcher.getRow(i), _rows, _numRowsToKeep);
+    }
+  }
+
+  private DataSchema createDataSchema(int numExpressions) {
     String[] columnNames = new String[numExpressions];
     DataSchema.ColumnDataType[] columnDataTypes = new DataSchema.ColumnDataType[numExpressions];
     for (int i = 0; i < numExpressions; i++) {
@@ -182,10 +201,9 @@ public class SelectionOrderByOperator extends BaseOperator<SelectionResultsBlock
       columnDataTypes[i] = DataSchema.ColumnDataType.fromDataType(_orderByColumnContexts[i].getDataType(),
           _orderByColumnContexts[i].isSingleValue());
     }
-    DataSchema dataSchema = new DataSchema(columnNames, columnDataTypes);
-
-    return new SelectionResultsBlock(dataSchema, getSortedRows(), _comparator, _queryContext);
+    return new DataSchema(columnNames, columnDataTypes);
   }
+//Refactoring end
 
   /**
    * Helper method to compute the result when not all the output expressions are ordered.

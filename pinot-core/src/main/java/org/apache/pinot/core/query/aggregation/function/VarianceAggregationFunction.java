@@ -169,22 +169,34 @@ public class VarianceAggregationFunction extends BaseSingleInputAggregationFunct
     if (_nullHandlingEnabled) {
       nullBitmap = blockValSetMap.get(_expression).getNullBitmap();
     }
+
     if (nullBitmap != null && !nullBitmap.isEmpty()) {
-      for (int i = 0; i < length; i++) {
-        if (!nullBitmap.contains(i)) {
-          for (int groupKey : groupKeysArray[i]) {
-            setGroupByResult(groupKey, groupByResultHolder, 1L, values[i], 0.0);
-          }
-        }
-      }
+      aggregateGroupByMVWithNullHandling(length, groupKeysArray, groupByResultHolder, values, nullBitmap);
     } else {
-      for (int i = 0; i < length; i++) {
+      aggregateGroupByMVWithoutNullHandling(length, groupKeysArray, groupByResultHolder, values);
+    }
+  }
+
+  private void aggregateGroupByMVWithNullHandling(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, double[] values, RoaringBitmap nullBitmap) {
+    for (int i = 0; i < length; i++) {
+      if (!nullBitmap.contains(i)) {
         for (int groupKey : groupKeysArray[i]) {
           setGroupByResult(groupKey, groupByResultHolder, 1L, values[i], 0.0);
         }
       }
     }
   }
+
+  private void aggregateGroupByMVWithoutNullHandling(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, double[] values) {
+    for (int i = 0; i < length; i++) {
+      for (int groupKey : groupKeysArray[i]) {
+        setGroupByResult(groupKey, groupByResultHolder, 1L, values[i], 0.0);
+      }
+    }
+  }
+//Refactoring end
 
   @Override
   public VarianceTuple extractAggregationResult(AggregationResultHolder aggregationResultHolder) {

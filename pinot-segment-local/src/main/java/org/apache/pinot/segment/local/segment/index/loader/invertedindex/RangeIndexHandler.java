@@ -185,69 +185,87 @@ public class RangeIndexHandler extends BaseIndexHandler {
         ForwardIndexReaderContext readerContext = forwardIndexReader.createContext();
         CombinedInvertedIndexCreator rangeIndexCreator = newRangeIndexCreator(columnMetadata)) {
       if (columnMetadata.isSingleValue()) {
-        // Single-value column.
-        switch (columnMetadata.getDataType()) {
-          case INT:
-            for (int i = 0; i < numDocs; i++) {
-              rangeIndexCreator.add(forwardIndexReader.getInt(i, readerContext));
-            }
-            break;
-          case LONG:
-            for (int i = 0; i < numDocs; i++) {
-              rangeIndexCreator.add(forwardIndexReader.getLong(i, readerContext));
-            }
-            break;
-          case FLOAT:
-            for (int i = 0; i < numDocs; i++) {
-              rangeIndexCreator.add(forwardIndexReader.getFloat(i, readerContext));
-            }
-            break;
-          case DOUBLE:
-            for (int i = 0; i < numDocs; i++) {
-              rangeIndexCreator.add(forwardIndexReader.getDouble(i, readerContext));
-            }
-            break;
-          default:
-            throw new IllegalStateException("Unsupported data type: " + columnMetadata.getDataType());
-        }
+        handleSingleValueNonDictionaryColumn(forwardIndexReader, readerContext, rangeIndexCreator,
+            columnMetadata);
       } else {
-        // Multi-value column
-        int maxNumValuesPerMVEntry = columnMetadata.getMaxNumberOfMultiValues();
-        switch (columnMetadata.getDataType()) {
-          case INT:
-            int[] intValues = new int[maxNumValuesPerMVEntry];
-            for (int i = 0; i < numDocs; i++) {
-              int length = forwardIndexReader.getIntMV(i, intValues, readerContext);
-              rangeIndexCreator.add(intValues, length);
-            }
-            break;
-          case LONG:
-            long[] longValues = new long[maxNumValuesPerMVEntry];
-            for (int i = 0; i < numDocs; i++) {
-              int length = forwardIndexReader.getLongMV(i, longValues, readerContext);
-              rangeIndexCreator.add(longValues, length);
-            }
-            break;
-          case FLOAT:
-            float[] floatValues = new float[maxNumValuesPerMVEntry];
-            for (int i = 0; i < numDocs; i++) {
-              int length = forwardIndexReader.getFloatMV(i, floatValues, readerContext);
-              rangeIndexCreator.add(floatValues, length);
-            }
-            break;
-          case DOUBLE:
-            double[] doubleValues = new double[maxNumValuesPerMVEntry];
-            for (int i = 0; i < numDocs; i++) {
-              int length = forwardIndexReader.getDoubleMV(i, doubleValues, readerContext);
-              rangeIndexCreator.add(doubleValues, length);
-            }
-            break;
-          default:
-            throw new IllegalStateException("Unsupported data type: " + columnMetadata.getDataType());
-        }
+        handleMultiValueNonDictionaryColumn(forwardIndexReader, readerContext, rangeIndexCreator,
+            columnMetadata);
       }
       rangeIndexCreator.seal();
     }
+  }
+
+  private void handleSingleValueNonDictionaryColumn(ForwardIndexReader forwardIndexReader,
+      ForwardIndexReaderContext readerContext, CombinedInvertedIndexCreator rangeIndexCreator,
+      ColumnMetadata columnMetadata)
+      throws Exception {
+    int numDocs = columnMetadata.getTotalDocs();
+    switch (columnMetadata.getDataType()) {
+      case INT:
+        for (int i = 0; i < numDocs; i++) {
+          rangeIndexCreator.add(forwardIndexReader.getInt(i, readerContext));
+        }
+        break;
+      case LONG:
+        for (int i = 0; i < numDocs; i++) {
+          rangeIndexCreator.add(forwardIndexReader.getLong(i, readerContext));
+        }
+        break;
+      case FLOAT:
+        for (int i = 0; i < numDocs; i++) {
+          rangeIndexCreator.add(forwardIndexReader.getFloat(i, readerContext));
+        }
+        break;
+      case DOUBLE:
+        for (int i = 0; i < numDocs; i++) {
+          rangeIndexCreator.add(forwardIndexReader.getDouble(i, readerContext));
+        }
+        break;
+      default:
+        throw new IllegalStateException("Unsupported data type: " + columnMetadata.getDataType());
+    }
+  }
+
+  private void handleMultiValueNonDictionaryColumn(ForwardIndexReader forwardIndexReader,
+      ForwardIndexReaderContext readerContext, CombinedInvertedIndexCreator rangeIndexCreator,
+      ColumnMetadata columnMetadata)
+      throws Exception {
+    int numDocs = columnMetadata.getTotalDocs();
+    int maxNumValuesPerMVEntry = columnMetadata.getMaxNumberOfMultiValues();
+    switch (columnMetadata.getDataType()) {
+      case INT:
+        int[] intValues = new int[maxNumValuesPerMVEntry];
+        for (int i = 0; i < numDocs; i++) {
+          int length = forwardIndexReader.getIntMV(i, intValues, readerContext);
+          rangeIndexCreator.add(intValues, length);
+        }
+        break;
+      case LONG:
+        long[] longValues = new long[maxNumValuesPerMVEntry];
+        for (int i = 0; i < numDocs; i++) {
+          int length = forwardIndexReader.getLongMV(i, longValues, readerContext);
+          rangeIndexCreator.add(longValues, length);
+        }
+        break;
+      case FLOAT:
+        float[] floatValues = new float[maxNumValuesPerMVEntry];
+        for (int i = 0; i < numDocs; i++) {
+          int length = forwardIndexReader.getFloatMV(i, floatValues, readerContext);
+          rangeIndexCreator.add(floatValues, length);
+        }
+        break;
+      case DOUBLE:
+        double[] doubleValues = new double[maxNumValuesPerMVEntry];
+        for (int i = 0; i < numDocs; i++) {
+          int length = forwardIndexReader.getDoubleMV(i, doubleValues, readerContext);
+          rangeIndexCreator.add(doubleValues, length);
+        }
+        break;
+      default:
+        throw new IllegalStateException("Unsupported data type: " + columnMetadata.getDataType());
+    }
+  }
+//Refactoring end
   }
 
   private CombinedInvertedIndexCreator newRangeIndexCreator(ColumnMetadata columnMetadata)

@@ -215,38 +215,43 @@ public abstract class NullableSingleInputAggregationFunction<I, F extends Compar
 
     @Override
     public int next() {
-      if (!hasNext()) {
-        throw new NoSuchElementException();
+        if (!hasNext()) {
+          throw new NoSuchElementException();
+        }
+        if (_next1 < 0) {
+          _next1 = getNextFromIterator(_it1, _next2);
+        }
+        if (_next2 < 0) {
+          _next2 = getNextFromIterator(_it2, _next1);
+        }
+        assert _next1 >= 0 && _next2 >= 0;
+        if (_next1 <= _next2) {
+          return consume1();
+        } else {
+          return consume2();
+        }
       }
-      if (_next1 < 0) {
-        if (_it1.hasNext()) {
-          _next1 = _it1.next();
-        } else { //it1 is completely consumed
-          if (_next2 >= 0) { // consume the last cached value
-            return consume2();
-          } else { // after that, return all values from it2
-            return _it2.next();
+    
+      private int getNextFromIterator(IntIterator iterator, int otherNext) {
+        if (iterator.hasNext()) {
+          return iterator.next();
+        } else { 
+          if (otherNext >= 0) { 
+            return consumeValue(otherNext);
+          } else { 
+            return iterator.next(); 
           }
         }
       }
-      if (_next2 < 0) {
-        if (_it2.hasNext()) {
-          _next2 = _it2.next();
-        } else { //it2 is completely consumed
-          if (_next1 >= 0) { // consume the last cached value
-            return consume1();
-          } else { // after that, return all values from it1
-            return _it1.next();
-          }
+    
+      private int consumeValue(int value) {
+        if (value == _next1) {
+          return consume1();
+        } else {
+          return consume2();
         }
       }
-      assert _next1 >= 0 && _next2 >= 0;
-      if (_next1 <= _next2) {
-        return consume1();
-      } else {
-        return consume2();
-      }
-    }
+//Refactoring end
 
     private int consume1() {
       int nextVal = _next1;

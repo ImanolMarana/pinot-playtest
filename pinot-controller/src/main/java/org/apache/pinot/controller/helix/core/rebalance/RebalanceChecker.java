@@ -245,84 +245,122 @@ public class RebalanceChecker extends ControllerPeriodicTask<Void> {
 
   @VisibleForTesting
   static Map<String, Set<Pair<TableRebalanceContext, Long>>> getCandidateJobs(String tableNameWithType,
-      Map<String, Map<String, String>> allJobMetadata)
-      throws Exception {
-    long nowMs = System.currentTimeMillis();
-    Map<String, Set<Pair<TableRebalanceContext, Long>>> candidates = new HashMap<>();
-    // If the job started most recently has already completed, then skip retry for the table.
-    Pair<String, Long> latestStartedJob = null;
-    Pair<String, Long> latestCompletedJob = null;
-    // The processing order of job metadata from the given Map is not deterministic. Track the completed original
-    // jobs so that we can simply skip the retry jobs belonging to the completed original jobs.
-    Map<String, String> completedOriginalJobs = new HashMap<>();
-    Set<String> cancelledOriginalJobs = new HashSet<>();
-    for (Map.Entry<String, Map<String, String>> entry : allJobMetadata.entrySet()) {
-      String jobId = entry.getKey();
-      Map<String, String> jobMetadata = entry.getValue();
-      long statsUpdatedAt = Long.parseLong(jobMetadata.get(CommonConstants.ControllerJob.SUBMISSION_TIME_MS));
-      String jobStatsInStr = jobMetadata.get(RebalanceJobConstants.JOB_METADATA_KEY_REBALANCE_PROGRESS_STATS);
-      if (StringUtils.isEmpty(jobStatsInStr)) {
-        LOGGER.info("Skip rebalance job: {} as it has no job progress stats", jobId);
-        continue;
-      }
-      String jobCtxInStr = jobMetadata.get(RebalanceJobConstants.JOB_METADATA_KEY_REBALANCE_CONTEXT);
-      if (StringUtils.isEmpty(jobCtxInStr)) {
-        LOGGER.info("Skip rebalance job: {} as it has no job context", jobId);
-        continue;
-      }
-      TableRebalanceProgressStats jobStats = JsonUtils.stringToObject(jobStatsInStr, TableRebalanceProgressStats.class);
-      TableRebalanceContext jobCtx = JsonUtils.stringToObject(jobCtxInStr, TableRebalanceContext.class);
-      long jobStartTimeMs = jobStats.getStartTimeMs();
-      if (latestStartedJob == null || latestStartedJob.getRight() < jobStartTimeMs) {
-        latestStartedJob = Pair.of(jobId, jobStartTimeMs);
-      }
-      String originalJobId = jobCtx.getOriginalJobId();
-      RebalanceResult.Status jobStatus = jobStats.getStatus();
-      if (jobStatus == RebalanceResult.Status.DONE || jobStatus == RebalanceResult.Status.NO_OP) {
-        LOGGER.info("Skip rebalance job: {} as it has completed with status: {}", jobId, jobStatus);
-        completedOriginalJobs.put(originalJobId, jobId);
-        if (latestCompletedJob == null || latestCompletedJob.getRight() < jobStartTimeMs) {
-          latestCompletedJob = Pair.of(jobId, jobStartTimeMs);
+          Map<String, Map<String, String>> allJobMetadata)
+          throws Exception {
+        long nowMs = System.currentTimeMillis();
+        Map<String, Set<Pair<TableRebalanceContext, Long>>> candidates = new HashMap<>();
+        // If the job started most recently has already completed, then skip retry for the table.
+        Pair<String, Long> latestStartedJob = null;
+        Pair<String, Long> latestCompletedJob = null;
+        // The processing order of job metadata from the given Map is not deterministic. Track the completed original
+        // jobs so that we can simply skip the retry jobs belonging to the completed original jobs.
+        Map<String, String> completedOriginalJobs = new HashMap<>();
+        Set<String> cancelledOriginalJobs = new HashSet<>();
+    
+        for (Map.Entry<String, Map<String, String>> entry : allJobMetadata.entrySet()) {
+          processJobMetadata(entry, nowMs, candidates, latestStartedJob, latestCompletedJob, completedOriginalJobs,
+              cancelledOriginalJobs);
         }
-        continue;
+    
+        return postProcessCandidateJobs(tableNameWithType, candidates, latestCompletedJob, latestStartedJob,
+            cancelledOriginalJobs, completedOriginalJobs);
       }
-      if (jobStatus == RebalanceResult.Status.FAILED || jobStatus == RebalanceResult.Status.ABORTED) {
-        LOGGER.info("Found rebalance job: {} for original job: {} has been stopped with status: {}", jobId,
-            originalJobId, jobStatus);
-        candidates.computeIfAbsent(originalJobId, (k) -> new HashSet<>()).add(Pair.of(jobCtx, jobStartTimeMs));
-        continue;
+    
+      private static void processJobMetadata(Map.Entry<String, Map<String, String>> entry, long nowMs,
+          Map<String, Set<Pair<TableRebalanceContext, Long>>> candidates, Pair<String, Long> latestStartedJob,
+          Pair<String, Long> latestCompletedJob, Map<String, String> completedOriginalJobs,
+          Set<String> cancelledOriginalJobs)
+          throws Exception {
+        String jobId = entry.getKey();
+        Map<String, String> jobMetadata = entry.getValue();
+        long statsUpdatedAt = Long.parseLong(jobMetadata.get(CommonConstants.ControllerJob.SUBMISSION_TIME_MS));
+        String jobStatsInStr = jobMetadata.get(RebalanceJobConstants.JOB_METADATA_KEY_REBALANCE_PROGRESS_STATS);
+        if (StringUtils.isEmpty(jobStatsInStr)) {
+          LOGGER.info("Skip rebalance job: {} as it has no job progress stats", jobId);
+          return;
+        }
+        String jobCtxInStr = jobMetadata.get(RebalanceJobConstants.JOB_METADATA_KEY_REBALANCE_CONTEXT);
+        if (StringUtils.isEmpty(jobCtxInStr)) {
+          LOGGER.info("Skip rebalance job: {} as it has no job context", jobId);
+          return;
+        }
+        TableRebalanceProgressStats jobStats = JsonUtils.stringToObject(jobStatsInStr, TableRebalanceProgressStats.class);
+        TableRebalanceContext jobCtx = JsonUtils.stringToObject(jobCtxInStr, TableRebalanceContext.class);
+        long jobStartTimeMs = jobStats.getStartTimeMs();
+        if (latestStartedJob == null || latestStartedJob.getRight() < jobStartTimeMs) {
+          latestStartedJob = Pair.of(jobId, jobStartTimeMs);
+        }
+    
+        String originalJobId = jobCtx.getOriginalJobId();
+        RebalanceResult.Status jobStatus = jobStats.getStatus();
+    
+        processJobStatus(candidates, latestCompletedJob, jobId, jobMetadata, jobStartTimeMs, originalJobId, jobStatus,
+            jobCtx, nowMs);
       }
-      if (jobStatus == RebalanceResult.Status.CANCELLED) {
-        LOGGER.info("Found cancelled rebalance job: {} for original job: {}", jobId, originalJobId);
-        cancelledOriginalJobs.add(originalJobId);
-        continue;
+    
+      private static void processJobStatus(Map<String, Set<Pair<TableRebalanceContext, Long>>> candidates,
+          Pair<String, Long> latestCompletedJob, String jobId, Map<String, String> jobMetadata, long jobStartTimeMs,
+          String originalJobId, RebalanceResult.Status jobStatus, TableRebalanceContext jobCtx, long nowMs) {
+        switch (jobStatus) {
+          case DONE:
+          case NO_OP:
+            LOGGER.info("Skip rebalance job: {} as it has completed with status: {}", jobId, jobStatus);
+            jobMetadata.put(originalJobId, jobId);
+            if (latestCompletedJob == null || latestCompletedJob.getRight() < jobStartTimeMs) {
+              latestCompletedJob = Pair.of(jobId, jobStartTimeMs);
+            }
+            break;
+          case FAILED:
+          case ABORTED:
+            LOGGER.info("Found rebalance job: {} for original job: {} has been stopped with status: {}", jobId,
+                originalJobId, jobStatus);
+            candidates.computeIfAbsent(originalJobId, (k) -> new HashSet<>())
+                .add(Pair.of(jobCtx, jobStartTimeMs));
+            break;
+          case CANCELLED:
+            LOGGER.info("Found cancelled rebalance job: {} for original job: {}", jobId, originalJobId);
+            jobMetadata.put(originalJobId, jobId);
+            break;
+          case IN_PROGRESS:
+            // Check if an IN_PROGRESS job is still actively running.
+            long heartbeatTimeoutMs = jobCtx.getConfig().getHeartbeatTimeoutInMs();
+            if (nowMs - Long.parseLong(
+                jobMetadata.get(CommonConstants.ControllerJob.SUBMISSION_TIME_MS)) < heartbeatTimeoutMs) {
+              LOGGER.info(
+                  "Rebalance job: {} is actively running with status updated at: {} within timeout: {}. Skip "
+                      + "retry for table: {}", jobId,
+                  jobMetadata.get(CommonConstants.ControllerJob.SUBMISSION_TIME_MS), heartbeatTimeoutMs,
+                  "tableNameWithType");
+              candidates.clear();
+              return;
+            }
+            LOGGER.info("Found stuck rebalance job: {} for original job: {}", jobId, originalJobId);
+            candidates.computeIfAbsent(originalJobId, (k) -> new HashSet<>())
+                .add(Pair.of(jobCtx, jobStartTimeMs));
+            break;
+        }
       }
-      // Check if an IN_PROGRESS job is still actively running.
-      long heartbeatTimeoutMs = jobCtx.getConfig().getHeartbeatTimeoutInMs();
-      if (nowMs - statsUpdatedAt < heartbeatTimeoutMs) {
-        LOGGER.info("Rebalance job: {} is actively running with status updated at: {} within timeout: {}. Skip "
-            + "retry for table: {}", jobId, statsUpdatedAt, heartbeatTimeoutMs, tableNameWithType);
-        return Collections.emptyMap();
+    
+      private static Map<String, Set<Pair<TableRebalanceContext, Long>>> postProcessCandidateJobs(
+          String tableNameWithType, Map<String, Set<Pair<TableRebalanceContext, Long>>> candidates,
+          Pair<String, Long> latestCompletedJob, Pair<String, Long> latestStartedJob, Set<String> cancelledOriginalJobs,
+          Map<String, String> completedOriginalJobs) {
+        if (latestCompletedJob != null && latestCompletedJob.getLeft().equals(latestStartedJob.getLeft())) {
+          LOGGER.info("Rebalance job: {} started most recently has already done. Skip retry for table: {}",
+              latestCompletedJob.getLeft(), tableNameWithType);
+          return Collections.emptyMap();
+        }
+        for (String jobId : cancelledOriginalJobs) {
+          LOGGER.info("Skip original job: {} as it's cancelled", jobId);
+          candidates.remove(jobId);
+        }
+        for (Map.Entry<String, String> entry : completedOriginalJobs.entrySet()) {
+          LOGGER.info("Skip original job: {} as it's completed by attempt: {}", entry.getKey(), entry.getValue());
+          candidates.remove(entry.getKey());
+        }
+        return candidates;
       }
-      // The job is considered failed, but it's possible it is still running, then we might end up with more than one
-      // rebalance jobs running in parallel for a table. The rebalance algorithm is idempotent, so this should be fine
-      // for the correctness.
-      LOGGER.info("Found stuck rebalance job: {} for original job: {}", jobId, originalJobId);
-      candidates.computeIfAbsent(originalJobId, (k) -> new HashSet<>()).add(Pair.of(jobCtx, jobStartTimeMs));
-    }
-    if (latestCompletedJob != null && latestCompletedJob.getLeft().equals(latestStartedJob.getLeft())) {
-      LOGGER.info("Rebalance job: {} started most recently has already done. Skip retry for table: {}",
-          latestCompletedJob.getLeft(), tableNameWithType);
-      return Collections.emptyMap();
-    }
-    for (String jobId : cancelledOriginalJobs) {
-      LOGGER.info("Skip original job: {} as it's cancelled", jobId);
-      candidates.remove(jobId);
-    }
-    for (Map.Entry<String, String> entry : completedOriginalJobs.entrySet()) {
-      LOGGER.info("Skip original job: {} as it's completed by attempt: {}", entry.getKey(), entry.getValue());
-      candidates.remove(entry.getKey());
-    }
-    return candidates;
+
+//Refactoring end
   }
 }

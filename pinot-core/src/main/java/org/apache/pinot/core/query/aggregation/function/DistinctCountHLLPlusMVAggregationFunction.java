@@ -198,68 +198,93 @@ public class DistinctCountHLLPlusMVAggregationFunction extends DistinctCountHLLP
     DataType storedType = blockValSet.getValueType().getStoredType();
     switch (storedType) {
       case INT:
-        int[][] intValuesArray = blockValSet.getIntValuesMV();
-        for (int i = 0; i < length; i++) {
-          int[] intValues = intValuesArray[i];
-          for (int groupKey : groupKeysArray[i]) {
-            HyperLogLogPlus hyperLogLogPlus = getHyperLogLogPlus(groupByResultHolder, groupKey);
-            for (int value : intValues) {
-              hyperLogLogPlus.offer(value);
-            }
-          }
-        }
+        aggregateGroupByMVForInt(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case LONG:
-        long[][] longValuesArray = blockValSet.getLongValuesMV();
-        for (int i = 0; i < length; i++) {
-          long[] longValues = longValuesArray[i];
-          for (int groupKey : groupKeysArray[i]) {
-            HyperLogLogPlus hyperLogLogPlus = getHyperLogLogPlus(groupByResultHolder, groupKey);
-            for (long value : longValues) {
-              hyperLogLogPlus.offer(value);
-            }
-          }
-        }
+        aggregateGroupByMVForLong(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case FLOAT:
-        float[][] floatValuesArray = blockValSet.getFloatValuesMV();
-        for (int i = 0; i < length; i++) {
-          float[] floatValues = floatValuesArray[i];
-          for (int groupKey : groupKeysArray[i]) {
-            HyperLogLogPlus hyperLogLogPlus = getHyperLogLogPlus(groupByResultHolder, groupKey);
-            for (float value : floatValues) {
-              hyperLogLogPlus.offer(value);
-            }
-          }
-        }
+        aggregateGroupByMVForFloat(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case DOUBLE:
-        double[][] doubleValuesArray = blockValSet.getDoubleValuesMV();
-        for (int i = 0; i < length; i++) {
-          double[] doubleValues = doubleValuesArray[i];
-          for (int groupKey : groupKeysArray[i]) {
-            HyperLogLogPlus hyperLogLogPlus = getHyperLogLogPlus(groupByResultHolder, groupKey);
-            for (double value : doubleValues) {
-              hyperLogLogPlus.offer(value);
-            }
-          }
-        }
+        aggregateGroupByMVForDouble(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case STRING:
-        String[][] stringValuesArray = blockValSet.getStringValuesMV();
-        for (int i = 0; i < length; i++) {
-          String[] stringValues = stringValuesArray[i];
-          for (int groupKey : groupKeysArray[i]) {
-            HyperLogLogPlus hyperLogLogPlus = getHyperLogLogPlus(groupByResultHolder, groupKey);
-            for (String value : stringValues) {
-              hyperLogLogPlus.offer(value);
-            }
-          }
-        }
+        aggregateGroupByMVForString(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       default:
         throw new IllegalStateException(
             "Illegal data type for DISTINCT_COUNT_HLL_MV aggregation function: " + storedType);
     }
   }
-}
+
+  private void aggregateGroupByMVForInt(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    int[][] intValuesArray = blockValSet.getIntValuesMV();
+    for (int i = 0; i < length; i++) {
+      int[] intValues = intValuesArray[i];
+      for (int groupKey : groupKeysArray[i]) {
+        HyperLogLogPlus hyperLogLogPlus = getHyperLogLogPlus(groupByResultHolder, groupKey);
+        for (int value : intValues) {
+          hyperLogLogPlus.offer(value);
+        }
+      }
+    }
+  }
+
+  private void aggregateGroupByMVForLong(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    long[][] longValuesArray = blockValSet.getLongValuesMV();
+    for (int i = 0; i < length; i++) {
+      long[] longValues = longValuesArray[i];
+      for (int groupKey : groupKeysArray[i]) {
+        HyperLogLogPlus hyperLogLogPlus = getHyperLogLogPlus(groupByResultHolder, groupKey);
+        for (long value : longValues) {
+          hyperLogLogPlus.offer(value);
+        }
+      }
+    }
+  }
+
+  private void aggregateGroupByMVForFloat(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    float[][] floatValuesArray = blockValSet.getFloatValuesMV();
+    for (int i = 0; i < length; i++) {
+      float[] floatValues = floatValuesArray[i];
+      for (int groupKey : groupKeysArray[i]) {
+        HyperLogLogPlus hyperLogLogPlus = getHyperLogLogPlus(groupByResultHolder, groupKey);
+        for (float value : floatValues) {
+          hyperLogLogPlus.offer(value);
+        }
+      }
+    }
+  }
+
+  private void aggregateGroupByMVForDouble(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    double[][] doubleValuesArray = blockValSet.getDoubleValuesMV();
+    for (int i = 0; i < length; i++) {
+      double[] doubleValues = doubleValuesArray[i];
+      for (int groupKey : groupKeysArray[i]) {
+        HyperLogLogPlus hyperLogLogPlus = getHyperLogLogPlus(groupByResultHolder, groupKey);
+        for (double value : doubleValues) {
+          hyperLogLogPlus.offer(value);
+        }
+      }
+    }
+  }
+
+  private void aggregateGroupByMVForString(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    String[][] stringValuesArray = blockValSet.getStringValuesMV();
+    for (int i = 0; i < length; i++) {
+      String[] stringValues = stringValuesArray[i];
+      for (int groupKey : groupKeysArray[i]) {
+        HyperLogLogPlus hyperLogLogPlus = getHyperLogLogPlus(groupByResultHolder, groupKey);
+        for (String value : stringValues) {
+          hyperLogLogPlus.offer(value);
+        }
+      }
+    }
+  }
+//Refactoring end

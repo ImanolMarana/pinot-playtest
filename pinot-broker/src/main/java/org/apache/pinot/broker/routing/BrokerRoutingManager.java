@@ -439,6 +439,19 @@ public class BrokerRoutingManager implements RoutingManager, ClusterChangeHandle
 
     Set<String> onlineSegments = getOnlineSegments(idealState);
 
+    RoutingEntry routingEntry = buildRoutingEntry(tableConfig, idealStatePath, externalViewPath, idealState,
+        externalView, onlineSegments, idealStateVersion, externalViewVersion, tableNameWithType);
+
+    if (_routingEntryMap.put(tableNameWithType, routingEntry) == null) {
+      LOGGER.info("Built routing for table: {}", tableNameWithType);
+    } else {
+      LOGGER.info("Rebuilt routing for table: {}", tableNameWithType);
+    }
+  }
+
+  private RoutingEntry buildRoutingEntry(TableConfig tableConfig, String idealStatePath, String externalViewPath,
+      IdealState idealState, ExternalView externalView, Set<String> onlineSegments, int idealStateVersion,
+      int externalViewVersion, String tableNameWithType) {
     SegmentPreSelector segmentPreSelector =
         SegmentPreSelectorFactory.getSegmentPreSelector(tableConfig, _propertyStore);
     Set<String> preSelectedOnlineSegments = segmentPreSelector.preSelect(onlineSegments);
@@ -456,6 +469,65 @@ public class BrokerRoutingManager implements RoutingManager, ClusterChangeHandle
     instanceSelector.init(_routableServers, idealState, externalView, preSelectedOnlineSegments);
 
     // Add time boundary manager if both offline and real-time part exist for a hybrid table
+    TimeBoundaryManager timeBoundaryManager = buildTimeBoundaryManager(tableNameWithType, tableConfig, idealState,
+        externalView, preSelectedOnlineSegments);
+
+    SegmentPartitionMetadataManager partitionMetadataManager = buildPartitionMetadataManager(tableConfig,
+        tableNameWithType);
+
+    QueryConfig queryConfig = tableConfig.getQueryConfig();
+    Long queryTimeoutMs = queryConfig != null ? queryConfig.getTimeoutMs() : null;
+
+    SegmentZkMetadataFetcher segmentZkMetadataFetcher =
+        buildSegmentZkMetadataFetcher(tableNameWithType, idealState, externalView, preSelectedOnlineSegments,
+            segmentPruners, partitionMetadataManager);
+
+    return new RoutingEntry(tableNameWithType, idealStatePath, externalViewPath, segmentPreSelector, segmentSelector,
+        segmentPruners, instanceSelector, idealStateVersion, externalViewVersion, segmentZkMetadataFetcher,
+        timeBoundaryManager, partitionMetadataManager, queryTimeoutMs);
+  }
+
+  private SegmentZkMetadataFetcher buildSegmentZkMetadataFetcher(String tableNameWithType, IdealState idealState,
+      ExternalView externalView, Set<String> preSelectedOnlineSegments, List<SegmentPruner> segmentPruners,
+      SegmentPartitionMetadataManager partitionMetadataManager) {
+    SegmentZkMetadataFetcher segmentZkMetadataFetcher =
+        new SegmentZkMetadataFetcher(tableNameWithType, _propertyStore);
+    for (SegmentZkMetadataFetchListener listener : segmentPruners) {
+      segmentZkMetadataFetcher.register(listener);
+    }
+    if (partitionMetadataManager != null) {
+      segmentZkMetadataFetcher.register(partitionMetadataManager);
+    }
+    segmentZkMetadataFetcher.init(idealState, externalView, preSelectedOnlineSegments);
+    return segmentZkMetadataFetcher;
+  }
+
+  private SegmentPartitionMetadataManager buildPartitionMetadataManager(TableConfig tableConfig,
+      String tableNameWithType) {
+    SegmentPartitionMetadataManager partitionMetadataManager = null;
+    // TODO: Support multiple partition columns
+    // TODO: Make partition pruner on top of the partition metadata manager to avoid keeping 2 copies of the metadata
+    if (_pinotConfig.getProperty(CommonConstants.Broker.CONFIG_OF_ENABLE_PARTITION_METADATA_MANAGER,
+        CommonConstants.Broker.DEFAULT_ENABLE_PARTITION_METADATA_MANAGER)) {
+      SegmentPartitionConfig segmentPartitionConfig = tableConfig.getIndexingConfig().getSegmentPartitionConfig();
+      if (segmentPartitionConfig == null || segmentPartitionConfig.getColumnPartitionMap().size() != 1) {
+        LOGGER.warn("Cannot enable SegmentPartitionMetadataManager. "
+            + "Expecting SegmentPartitionConfig with exact 1 partition column");
+      } else {
+        Map.Entry<String, ColumnPartitionConfig> partitionConfig =
+            segmentPartitionConfig.getColumnPartitionMap().entrySet().iterator().next();
+        LOGGER.info("Enabling SegmentPartitionMetadataManager for table: {} on partition column: {}",
+            tableNameWithType,
+            partitionConfig.getKey());
+        partitionMetadataManager = new SegmentPartitionMetadataManager(tableNameWithType, partitionConfig.getKey(),
+            partitionConfig.getValue().getFunctionName(), partitionConfig.getValue().getNumPartitions());
+      }
+    }
+    return partitionMetadataManager;
+  }
+
+  private TimeBoundaryManager buildTimeBoundaryManager(String tableNameWithType, TableConfig tableConfig,
+      IdealState idealState, ExternalView externalView, Set<String> preSelectedOnlineSegments) {
     TimeBoundaryManager timeBoundaryManager = null;
     String rawTableName = TableNameBuilder.extractRawTableName(tableNameWithType);
     if (TableNameBuilder.isOfflineTableResource(tableNameWithType)) {
@@ -498,48 +570,9 @@ public class BrokerRoutingManager implements RoutingManager, ClusterChangeHandle
         offlineTableRoutingEntry.setTimeBoundaryManager(offlineTableTimeBoundaryManager);
       }
     }
-
-    SegmentPartitionMetadataManager partitionMetadataManager = null;
-    // TODO: Support multiple partition columns
-    // TODO: Make partition pruner on top of the partition metadata manager to avoid keeping 2 copies of the metadata
-    if (_pinotConfig.getProperty(CommonConstants.Broker.CONFIG_OF_ENABLE_PARTITION_METADATA_MANAGER,
-        CommonConstants.Broker.DEFAULT_ENABLE_PARTITION_METADATA_MANAGER)) {
-      SegmentPartitionConfig segmentPartitionConfig = tableConfig.getIndexingConfig().getSegmentPartitionConfig();
-      if (segmentPartitionConfig == null || segmentPartitionConfig.getColumnPartitionMap().size() != 1) {
-        LOGGER.warn("Cannot enable SegmentPartitionMetadataManager. "
-            + "Expecting SegmentPartitionConfig with exact 1 partition column");
-      } else {
-        Map.Entry<String, ColumnPartitionConfig> partitionConfig =
-            segmentPartitionConfig.getColumnPartitionMap().entrySet().iterator().next();
-        LOGGER.info("Enabling SegmentPartitionMetadataManager for table: {} on partition column: {}", tableNameWithType,
-            partitionConfig.getKey());
-        partitionMetadataManager = new SegmentPartitionMetadataManager(tableNameWithType, partitionConfig.getKey(),
-            partitionConfig.getValue().getFunctionName(), partitionConfig.getValue().getNumPartitions());
-      }
-    }
-
-    QueryConfig queryConfig = tableConfig.getQueryConfig();
-    Long queryTimeoutMs = queryConfig != null ? queryConfig.getTimeoutMs() : null;
-
-    SegmentZkMetadataFetcher segmentZkMetadataFetcher = new SegmentZkMetadataFetcher(tableNameWithType, _propertyStore);
-    for (SegmentZkMetadataFetchListener listener : segmentPruners) {
-      segmentZkMetadataFetcher.register(listener);
-    }
-    if (partitionMetadataManager != null) {
-      segmentZkMetadataFetcher.register(partitionMetadataManager);
-    }
-    segmentZkMetadataFetcher.init(idealState, externalView, preSelectedOnlineSegments);
-
-    RoutingEntry routingEntry =
-        new RoutingEntry(tableNameWithType, idealStatePath, externalViewPath, segmentPreSelector, segmentSelector,
-            segmentPruners, instanceSelector, idealStateVersion, externalViewVersion, segmentZkMetadataFetcher,
-            timeBoundaryManager, partitionMetadataManager, queryTimeoutMs);
-    if (_routingEntryMap.put(tableNameWithType, routingEntry) == null) {
-      LOGGER.info("Built routing for table: {}", tableNameWithType);
-    } else {
-      LOGGER.info("Rebuilt routing for table: {}", tableNameWithType);
-    }
+    return timeBoundaryManager;
   }
+//Refactoring end
 
   /**
    * Returns the online segments (with ONLINE/CONSUMING instances) in the given ideal state.

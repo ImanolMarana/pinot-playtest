@@ -217,30 +217,56 @@ public class CalciteSqlParser {
   private static void validateDistinctQuery(PinotQuery pinotQuery)
       throws SqlCompilationException {
     List<Expression> selectList = pinotQuery.getSelectList();
-    if (selectList.size() == 1) {
-      Function function = selectList.get(0).getFunctionCall();
-      if (function != null && function.getOperator().equals("distinct")) {
-        if (CollectionUtils.isNotEmpty(pinotQuery.getGroupByList())) {
-          // TODO: Explore if DISTINCT should be supported with GROUP BY
-          throw new IllegalStateException("DISTINCT with GROUP BY is currently not supported");
-        }
-        if (pinotQuery.getLimit() <= 0) {
-          // TODO: Consider changing it to SELECTION query for LIMIT 0
-          throw new IllegalStateException("DISTINCT must have positive LIMIT");
-        }
-        List<Expression> orderByList = pinotQuery.getOrderByList();
-        if (orderByList != null) {
-          List<Expression> distinctExpressions = getAliasLeftExpressionsFromDistinctExpression(function);
-          for (Expression orderByExpression : orderByList) {
-            // NOTE: Order-by is always a Function with the ordering of the Expression
-            if (!distinctExpressions.contains(removeOrderByFunctions(orderByExpression))) {
-              throw new IllegalStateException("ORDER-BY columns should be included in the DISTINCT columns");
-            }
-          }
-        }
+    if (selectList.size() != 1) {
+      return;
+    }
+    Function function = selectList.get(0).getFunctionCall();
+    if (function == null || !function.getOperator().equals("distinct")) {
+      return;
+    }
+    if (CollectionUtils.isNotEmpty(pinotQuery.getGroupByList())) {
+      // TODO: Explore if DISTINCT should be supported with GROUP BY
+      throw new IllegalStateException("DISTINCT with GROUP BY is currently not supported");
+    }
+    if (pinotQuery.getLimit() <= 0) {
+      // TODO: Consider changing it to SELECTION query for LIMIT 0
+      throw new IllegalStateException("DISTINCT must have positive LIMIT");
+    }
+    List<Expression> orderByList = pinotQuery.getOrderByList();
+    if (orderByList == null) {
+      return;
+    }
+    List<Expression> distinctExpressions = getAliasLeftExpressionsFromDistinctExpression(function);
+    for (Expression orderByExpression : orderByList) {
+      // NOTE: Order-by is always a Function with the ordering of the Expression
+      if (distinctExpressions.contains(removeOrderByFunctions(orderByExpression))) {
+        continue;
       }
+      throw new IllegalStateException("ORDER-BY columns should be included in the DISTINCT columns");
     }
   }
+
+  private static List<Expression> getAliasLeftExpressionsFromDistinctExpression(Function function) {
+    List<Expression> operands = function.getOperands();
+    List<Expression> expressions = new ArrayList<>(operands.size());
+    for (Expression operand : operands) {
+      expressions.add(isAsFunction(operand) ? operand.getFunctionCall().getOperands().get(0) : operand);
+    }
+    return expressions;
+  }
+
+  public static Expression removeOrderByFunctions(Expression expression) {
+    while (expression.isSetFunctionCall() && ORDER_BY_FUNCTIONS.contains(expression.getFunctionCall().getOperator())) {
+      expression = expression.getFunctionCall().getOperands().get(0);
+    }
+    return expression;
+  }
+
+  public static boolean isAsFunction(Expression expression) {
+    Function function = expression.getFunctionCall();
+    return function != null && function.getOperator().equals("as");
+  }
+//Refactoring end
 
   /*
    * Throws an exception if the filter's rhs has NULL because:

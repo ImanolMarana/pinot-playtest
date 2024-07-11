@@ -45,47 +45,26 @@ public class V3DefaultColumnHandler extends BaseDefaultColumnHandler {
       throws Exception {
     LOGGER.info("Starting default column action: {} on column: {}", action, column);
 
-    // For UPDATE and REMOVE action, delete existing dictionary and forward index, and remove column metadata
     if (action.isUpdateAction() || action.isRemoveAction()) {
       removeColumnIndices(column);
       if (action.isRemoveAction()) {
-        // No more to do for REMOVE action.
         return true;
       }
     }
-    // For ADD and UPDATE action, need to create new dictionary and forward index,
-    // update column metadata, and write out with V3 format.
+
     if (!createColumnV1Indices(column)) {
       return false;
     }
-    // Write index to V3 format
+
+    return updateColumnV3Indices(column);
+  }
+
+  private boolean updateColumnV3Indices(String column) throws Exception {
     FieldSpec fieldSpec = _schema.getFieldSpecFor(column);
     Preconditions.checkNotNull(fieldSpec);
     boolean isSingleValue = fieldSpec.isSingleValueField();
-    boolean forwardIndexDisabled = !isSingleValue && isForwardIndexDisabled(column);
-    File forwardIndexFile = null;
-    File invertedIndexFile = null;
-
-    if (isSingleValue) {
-      forwardIndexFile = new File(_indexDir, column + V1Constants.Indexes.SORTED_SV_FORWARD_INDEX_FILE_EXTENSION);
-      if (!forwardIndexFile.exists()) {
-        forwardIndexFile = new File(_indexDir, column + V1Constants.Indexes.UNSORTED_SV_FORWARD_INDEX_FILE_EXTENSION);
-      }
-      if (!forwardIndexFile.exists()) {
-        forwardIndexFile = new File(_indexDir, column + V1Constants.Indexes.RAW_SV_FORWARD_INDEX_FILE_EXTENSION);
-      }
-    } else {
-      if (forwardIndexDisabled) {
-        // An inverted index is created instead of forward index for multi-value columns with forward index disabled
-        // Note that we don't currently support creation of forward index disabled derived columns
-        invertedIndexFile = new File(_indexDir, column + V1Constants.Indexes.BITMAP_INVERTED_INDEX_FILE_EXTENSION);
-      } else {
-        forwardIndexFile = new File(_indexDir, column + V1Constants.Indexes.UNSORTED_MV_FORWARD_INDEX_FILE_EXTENSION);
-        if (!forwardIndexFile.exists()) {
-          forwardIndexFile = new File(_indexDir, column + V1Constants.Indexes.RAW_MV_FORWARD_INDEX_FILE_EXTENSION);
-        }
-      }
-    }
+    File forwardIndexFile = getForwardIndexFile(column, isSingleValue);
+    File invertedIndexFile = isSingleValue ? null : getInvertedIndexFile(column);
 
     if (forwardIndexFile != null) {
       LoaderUtils.writeIndexToV3Format(_segmentWriter, column, forwardIndexFile, StandardIndexes.forward());
@@ -101,8 +80,36 @@ public class V3DefaultColumnHandler extends BaseDefaultColumnHandler {
 
     File nullValueVectorFile = new File(_indexDir, column + V1Constants.Indexes.NULLVALUE_VECTOR_FILE_EXTENSION);
     if (nullValueVectorFile.exists()) {
-      LoaderUtils.writeIndexToV3Format(_segmentWriter, column, nullValueVectorFile, StandardIndexes.nullValueVector());
+      LoaderUtils.writeIndexToV3Format(_segmentWriter, column, nullValueVectorFile,
+          StandardIndexes.nullValueVector());
     }
     return true;
   }
-}
+
+  private File getForwardIndexFile(String column, boolean isSingleValue) {
+    if (isSingleValue) {
+      File forwardIndexFile = new File(_indexDir, column + V1Constants.Indexes.SORTED_SV_FORWARD_INDEX_FILE_EXTENSION);
+      if (!forwardIndexFile.exists()) {
+        forwardIndexFile = new File(_indexDir, column + V1Constants.Indexes.UNSORTED_SV_FORWARD_INDEX_FILE_EXTENSION);
+      }
+      if (!forwardIndexFile.exists()) {
+        forwardIndexFile = new File(_indexDir, column + V1Constants.Indexes.RAW_SV_FORWARD_INDEX_FILE_EXTENSION);
+      }
+      return forwardIndexFile;
+    } else {
+      if (isForwardIndexDisabled(column)) {
+        return null;
+      } else {
+        File forwardIndexFile = new File(_indexDir, column + V1Constants.Indexes.UNSORTED_MV_FORWARD_INDEX_FILE_EXTENSION);
+        if (!forwardIndexFile.exists()) {
+          forwardIndexFile = new File(_indexDir, column + V1Constants.Indexes.RAW_MV_FORWARD_INDEX_FILE_EXTENSION);
+        }
+        return forwardIndexFile;
+      }
+    }
+  }
+
+  private File getInvertedIndexFile(String column) {
+    return new File(_indexDir, column + V1Constants.Indexes.BITMAP_INVERTED_INDEX_FILE_EXTENSION);
+  }
+//Refactoring end

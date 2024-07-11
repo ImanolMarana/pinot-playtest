@@ -101,103 +101,103 @@ public class H3IndexFilterOperator extends BaseFilterOperator {
     try {
       if (Double.isNaN(_lowerBound) || _lowerBound < 0) {
         // No lower bound
-
-        if (Double.isNaN(_upperBound)) {
-          // No bound, return a match-all block
-          return new MatchAllDocIdSet(_numDocs);
-        }
-
-        // Upper bound only
-        List<Long> fullMatchH3Ids = getAlwaysMatchH3Ids(_upperBound);
-        HashSet<Long> partialMatchH3Ids = new HashSet<>(getPossibleMatchH3Ids(_upperBound));
-        partialMatchH3Ids.removeAll(fullMatchH3Ids);
-
-        MutableRoaringBitmap fullMatchDocIds = new MutableRoaringBitmap();
-        for (long fullMatchH3Id : fullMatchH3Ids) {
-          fullMatchDocIds.or(_h3IndexReader.getDocIds(fullMatchH3Id));
-        }
-
-        MutableRoaringBitmap partialMatchDocIds = new MutableRoaringBitmap();
-        for (long partialMatchH3Id : partialMatchH3Ids) {
-          partialMatchDocIds.or(_h3IndexReader.getDocIds(partialMatchH3Id));
-        }
-
-        return getFilterBlock(fullMatchDocIds, partialMatchDocIds);
+        return handleNoLowerBound();
       }
 
       if (Double.isNaN(_upperBound)) {
         // Lower bound only
-
-        List<Long> alwaysNotMatchH3Ids = getAlwaysMatchH3Ids(_lowerBound);
-        Set<Long> possibleNotMatchH3Ids = new HashSet<>(getPossibleMatchH3Ids(_lowerBound));
-
-        // Flip the result of possible not match doc ids to get the full match doc ids
-        MutableRoaringBitmap fullMatchDocIds = new MutableRoaringBitmap();
-        for (long partialMatchH3Id : possibleNotMatchH3Ids) {
-          fullMatchDocIds.or(_h3IndexReader.getDocIds(partialMatchH3Id));
-        }
-        fullMatchDocIds.flip(0L, _numDocs);
-
-        // Remove the always not match H3 ids from possible not match H3 ids to get the partial match H3 ids
-        possibleNotMatchH3Ids.removeAll(alwaysNotMatchH3Ids);
-        MutableRoaringBitmap partialMatchDocIds = new MutableRoaringBitmap();
-        for (long partialMatchH3Id : possibleNotMatchH3Ids) {
-          partialMatchDocIds.or(_h3IndexReader.getDocIds(partialMatchH3Id));
-        }
-
-        return getFilterBlock(fullMatchDocIds, partialMatchDocIds);
+        return handleLowerBoundOnly();
       }
 
       // Both lower bound and upper bound exist
-      List<Long> lowerAlwaysMatchH3Ids = getAlwaysMatchH3Ids(_lowerBound);
-      List<Long> lowerPossibleMatchH3Ids = getPossibleMatchH3Ids(_lowerBound);
-      List<Long> upperAlwaysMatchH3Ids = getAlwaysMatchH3Ids(_upperBound);
-      List<Long> upperPossibleMatchH3Ids = getPossibleMatchH3Ids(_upperBound);
-
-      // Remove the possible match H3 ids for the lower bound from the always match H3 ids for the upper bound to get
-      // the full match H3 ids
-      Set<Long> fullMatchH3Ids;
-      if (upperAlwaysMatchH3Ids.size() > lowerPossibleMatchH3Ids.size()) {
-        fullMatchH3Ids = new HashSet<>(upperAlwaysMatchH3Ids);
-        fullMatchH3Ids.removeAll(lowerPossibleMatchH3Ids);
-      } else {
-        fullMatchH3Ids = Collections.emptySet();
-      }
-      MutableRoaringBitmap fullMatchDocIds = new MutableRoaringBitmap();
-      for (long fullMatchH3Id : fullMatchH3Ids) {
-        fullMatchDocIds.or(_h3IndexReader.getDocIds(fullMatchH3Id));
-      }
-
-      // Remove the always match H3 ids for the lower bound (always not match H3 ids) and the full match H3 ids from the
-      // possible match H3 ids for the upper bound to get the partial match H3 ids
-      Set<Long> partialMatchH3Ids = new HashSet<>(upperPossibleMatchH3Ids);
-      partialMatchH3Ids.removeAll(lowerAlwaysMatchH3Ids);
-      partialMatchH3Ids.removeAll(fullMatchH3Ids);
-      MutableRoaringBitmap partialMatchDocIds = new MutableRoaringBitmap();
-      for (long partialMatchH3Id : partialMatchH3Ids) {
-        partialMatchDocIds.or(_h3IndexReader.getDocIds(partialMatchH3Id));
-      }
-
-      return getFilterBlock(fullMatchDocIds, partialMatchDocIds);
+      return handleBothBounds();
     } catch (Exception e) {
       // Fall back to ExpressionFilterOperator when the execution encounters exception (e.g. numRings is too large)
       return new ExpressionFilterOperator(_segment, _queryContext, _predicate, _numDocs).getTrues();
     }
   }
 
-  /**
-   * Returns the H3 ids that is ALWAYS fully covered by the circle with the given distance as the radius and a point
-   * within the _h3Id hexagon as the center.
-   * <p>The farthest distance from the center of the center hexagon to the center of a hexagon in the nth ring is
-   * {@code sqrt(3) * n * edgeLength}. Counting the distance from the center to a point in the hexagon, which is up
-   * to the edge length, it is guaranteed that the hexagons in the nth ring are always fully covered if:
-   * {@code distance >= (sqrt(3) * n + 2) * edgeLength}.
-   */
-  private List<Long> getAlwaysMatchH3Ids(double distance) {
-    // NOTE: Pick a constant slightly larger than sqrt(3) to be conservative
-    int numRings = (int) Math.floor((distance / _edgeLength - 2) / 1.7321);
-    return numRings >= 0 ? getH3Ids(numRings) : Collections.emptyList();
+  private BlockDocIdSet handleNoLowerBound() {
+    if (Double.isNaN(_upperBound)) {
+      // No bound, return a match-all block
+      return new MatchAllDocIdSet(_numDocs);
+    }
+
+    // Upper bound only
+    List<Long> fullMatchH3Ids = getAlwaysMatchH3Ids(_upperBound);
+    HashSet<Long> partialMatchH3Ids = new HashSet<>(getPossibleMatchH3Ids(_upperBound));
+    partialMatchH3Ids.removeAll(fullMatchH3Ids);
+
+    return getFilterBlock(fullMatchH3Ids, partialMatchH3Ids);
   }
+
+  private BlockDocIdSet handleLowerBoundOnly() {
+    List<Long> alwaysNotMatchH3Ids = getAlwaysMatchH3Ids(_lowerBound);
+    Set<Long> possibleNotMatchH3Ids = new HashSet<>(getPossibleMatchH3Ids(_lowerBound));
+
+    // Flip the result of possible not match doc ids to get the full match doc ids
+    MutableRoaringBitmap fullMatchDocIds = new MutableRoaringBitmap();
+    for (long partialMatchH3Id : possibleNotMatchH3Ids) {
+      fullMatchDocIds.or(_h3IndexReader.getDocIds(partialMatchH3Id));
+    }
+    fullMatchDocIds.flip(0L, _numDocs);
+
+    // Remove the always not match H3 ids from possible not match H3 ids to get the partial match H3 ids
+    possibleNotMatchH3Ids.removeAll(alwaysNotMatchH3Ids);
+    MutableRoaringBitmap partialMatchDocIds = new MutableRoaringBitmap();
+    for (long partialMatchH3Id : possibleNotMatchH3Ids) {
+      partialMatchDocIds.or(_h3IndexReader.getDocIds(partialMatchH3Id));
+    }
+
+    return getFilterBlock(fullMatchDocIds, partialMatchDocIds);
+  }
+
+  private BlockDocIdSet handleBothBounds() {
+    List<Long> lowerAlwaysMatchH3Ids = getAlwaysMatchH3Ids(_lowerBound);
+    List<Long> lowerPossibleMatchH3Ids = getPossibleMatchH3Ids(_lowerBound);
+    List<Long> upperAlwaysMatchH3Ids = getAlwaysMatchH3Ids(_upperBound);
+    List<Long> upperPossibleMatchH3Ids = getPossibleMatchH3Ids(_upperBound);
+
+    // Remove the possible match H3 ids for the lower bound from the always match H3 ids for the upper bound to get
+    // the full match H3 ids
+    Set<Long> fullMatchH3Ids;
+    if (upperAlwaysMatchH3Ids.size() > lowerPossibleMatchH3Ids.size()) {
+      fullMatchH3Ids = new HashSet<>(upperAlwaysMatchH3Ids);
+      fullMatchH3Ids.removeAll(lowerPossibleMatchH3Ids);
+    } else {
+      fullMatchH3Ids = Collections.emptySet();
+    }
+    MutableRoaringBitmap fullMatchDocIds = new MutableRoaringBitmap();
+    for (long fullMatchH3Id : fullMatchH3Ids) {
+      fullMatchDocIds.or(_h3IndexReader.getDocIds(fullMatchH3Id));
+    }
+
+    // Remove the always match H3 ids for the lower bound (always not match H3 ids) and the full match H3 ids from the
+    // possible match H3 ids for the upper bound to get the partial match H3 ids
+    Set<Long> partialMatchH3Ids = new HashSet<>(upperPossibleMatchH3Ids);
+    partialMatchH3Ids.removeAll(lowerAlwaysMatchH3Ids);
+    partialMatchH3Ids.removeAll(fullMatchH3Ids);
+    MutableRoaringBitmap partialMatchDocIds = new MutableRoaringBitmap();
+    for (long partialMatchH3Id : partialMatchH3Ids) {
+      partialMatchDocIds.or(_h3IndexReader.getDocIds(partialMatchH3Id));
+    }
+
+    return getFilterBlock(fullMatchDocIds, partialMatchH3Ids);
+  }
+
+  private BlockDocIdSet getFilterBlock(List<Long> fullMatchH3Ids, Set<Long> partialMatchH3Ids) {
+    MutableRoaringBitmap fullMatchDocIds = new MutableRoaringBitmap();
+    for (long fullMatchH3Id : fullMatchH3Ids) {
+      fullMatchDocIds.or(_h3IndexReader.getDocIds(fullMatchH3Id));
+    }
+
+    MutableRoaringBitmap partialMatchDocIds = new MutableRoaringBitmap();
+    for (long partialMatchH3Id : partialMatchH3Ids) {
+      partialMatchDocIds.or(_h3IndexReader.getDocIds(partialMatchH3Id));
+    }
+    return getFilterBlock(fullMatchDocIds, partialMatchDocIds);
+  }
+//Refactoring end
 
   /**
    * Returns the H3 ids that MIGHT BE fully/partially covered by the circle with the given distance as the radius and a

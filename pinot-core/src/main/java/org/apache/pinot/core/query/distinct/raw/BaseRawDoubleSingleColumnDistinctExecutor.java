@@ -78,34 +78,46 @@ abstract class BaseRawDoubleSingleColumnDistinctExecutor implements DistinctExec
     BlockValSet blockValueSet = valueBlock.getBlockValueSet(_expression);
     int numDocs = valueBlock.getNumDocs();
     if (blockValueSet.isSingleValue()) {
-      double[] values = blockValueSet.getDoubleValuesSV();
-      if (_nullHandlingEnabled) {
-        RoaringBitmap nullBitmap = blockValueSet.getNullBitmap();
-        for (int i = 0; i < numDocs; i++) {
-          if (nullBitmap != null && nullBitmap.contains(i)) {
-            _hasNull = true;
-          } else if (add(values[i])) {
-            return true;
-          }
-        }
-      } else {
-        for (int i = 0; i < numDocs; i++) {
-          if (add(values[i])) {
-            return true;
-          }
+      return processSingleValueBlock(blockValueSet, numDocs);
+    } else {
+      return processMultiValueBlock(blockValueSet, numDocs);
+    }
+  }
+
+  private boolean processSingleValueBlock(BlockValSet blockValueSet, int numDocs) {
+    double[] values = blockValueSet.getDoubleValuesSV();
+    if (_nullHandlingEnabled) {
+      RoaringBitmap nullBitmap = blockValueSet.getNullBitmap();
+      for (int i = 0; i < numDocs; i++) {
+        if (nullBitmap != null && nullBitmap.contains(i)) {
+          _hasNull = true;
+        } else if (add(values[i])) {
+          return true;
         }
       }
     } else {
-      int[][] values = blockValueSet.getIntValuesMV();
       for (int i = 0; i < numDocs; i++) {
-        for (double value : values[i]) {
-          if (add(value)) {
-            return true;
-          }
+        if (add(values[i])) {
+          return true;
         }
       }
     }
     return false;
+  }
+
+  private boolean processMultiValueBlock(BlockValSet blockValueSet, int numDocs) {
+    int[][] values = blockValueSet.getIntValuesMV();
+    for (int i = 0; i < numDocs; i++) {
+      for (double value : values[i]) {
+        if (add(value)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+//Refactoring end
   }
 
   protected abstract boolean add(double val);

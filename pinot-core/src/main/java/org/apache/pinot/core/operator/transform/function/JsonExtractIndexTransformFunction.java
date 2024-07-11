@@ -65,29 +65,44 @@ public class JsonExtractIndexTransformFunction extends BaseTransformFunction {
               + " ['defaultValue'], ['jsonFilterExpression'])");
     }
 
+    _jsonIndexReader = extractJsonIndexReader(arguments, columnContextMap);
+    _jsonFieldTransformFunction = arguments.get(0);
+
+    _jsonPathString = extractJsonPathString(arguments);
+
+    _resultMetadata = extractResultMetadata(arguments);
+  }
+
+  private JsonIndexReader extractJsonIndexReader(List<TransformFunction> arguments,
+      Map<String, ColumnContext> columnContextMap) {
     TransformFunction firstArgument = arguments.get(0);
     if (firstArgument instanceof IdentifierTransformFunction) {
       String columnName = ((IdentifierTransformFunction) firstArgument).getColumnName();
-      _jsonIndexReader = columnContextMap.get(columnName).getDataSource().getJsonIndex();
-      if (_jsonIndexReader == null) {
+      JsonIndexReader jsonIndexReader = columnContextMap.get(columnName).getDataSource().getJsonIndex();
+      if (jsonIndexReader == null) {
         throw new IllegalStateException("jsonExtractIndex can only be applied on a column with JSON index");
       }
+      return jsonIndexReader;
     } else {
       throw new IllegalArgumentException("jsonExtractIndex can only be applied to a raw column");
     }
-    _jsonFieldTransformFunction = firstArgument;
+  }
 
+  private String extractJsonPathString(List<TransformFunction> arguments) {
     TransformFunction secondArgument = arguments.get(1);
     if (!(secondArgument instanceof LiteralTransformFunction)) {
       throw new IllegalArgumentException("JSON path argument must be a literal");
     }
-    _jsonPathString = ((LiteralTransformFunction) secondArgument).getStringLiteral();
+    String jsonPathString = ((LiteralTransformFunction) secondArgument).getStringLiteral();
     try {
-      JsonPathCache.INSTANCE.getOrCompute(_jsonPathString);
+      JsonPathCache.INSTANCE.getOrCompute(jsonPathString);
     } catch (Exception e) {
       throw new IllegalArgumentException("JSON path argument is not a valid JSON path");
     }
+    return jsonPathString;
+  }
 
+  private TransformResultMetadata extractResultMetadata(List<TransformFunction> arguments) {
     TransformFunction thirdArgument = arguments.get(2);
     if (!(thirdArgument instanceof LiteralTransformFunction)) {
       throw new IllegalArgumentException("Result type argument must be a literal");
@@ -101,6 +116,14 @@ public class JsonExtractIndexTransformFunction extends BaseTransformFunction {
     DataType dataType = _isSingleValue ? DataType.valueOf(resultsType)
         : DataType.valueOf(resultsType.substring(0, resultsType.length() - 6));
 
+    extractDefaultValue(arguments, dataType);
+
+    extractFilterJsonPath(arguments);
+
+    return new TransformResultMetadata(dataType, _isSingleValue, false);
+  }
+
+  private void extractDefaultValue(List<TransformFunction> arguments, DataType dataType) {
     if (arguments.size() >= 4) {
       TransformFunction fourthArgument = arguments.get(3);
       if (!(fourthArgument instanceof LiteralTransformFunction)) {
@@ -111,7 +134,8 @@ public class JsonExtractIndexTransformFunction extends BaseTransformFunction {
         _defaultValue = dataType.convert(((LiteralTransformFunction) fourthArgument).getStringLiteral());
       } else {
         try {
-          JsonNode mvArray = JsonUtils.stringToJsonNode(((LiteralTransformFunction) fourthArgument).getStringLiteral());
+          JsonNode mvArray = JsonUtils
+              .stringToJsonNode(((LiteralTransformFunction) fourthArgument).getStringLiteral());
           if (!mvArray.isArray()) {
             throw new IllegalArgumentException("Default value must be a valid JSON array");
           }
@@ -125,7 +149,9 @@ public class JsonExtractIndexTransformFunction extends BaseTransformFunction {
         }
       }
     }
+  }
 
+  private void extractFilterJsonPath(List<TransformFunction> arguments) {
     if (arguments.size() == 5) {
       TransformFunction fifthArgument = arguments.get(4);
       if (!(fifthArgument instanceof LiteralTransformFunction)) {
@@ -133,6 +159,9 @@ public class JsonExtractIndexTransformFunction extends BaseTransformFunction {
       }
       _filterJsonPath = ((LiteralTransformFunction) fifthArgument).getStringLiteral();
     }
+  }
+
+//Refactoring end
 
     _resultMetadata = new TransformResultMetadata(dataType, _isSingleValue, false);
   }

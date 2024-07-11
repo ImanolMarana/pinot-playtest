@@ -287,52 +287,7 @@ public class TransformFunctionFactory {
       QueryContext queryContext) {
     switch (expression.getType()) {
       case FUNCTION:
-        FunctionContext function = expression.getFunction();
-        String functionName = canonicalize(function.getFunctionName());
-        List<ExpressionContext> arguments = function.getArguments();
-        int numArguments = arguments.size();
-
-        // Check if the function is ArrayLiteraltransform function
-        if (functionName.equalsIgnoreCase(ArrayLiteralTransformFunction.FUNCTION_NAME)) {
-          return queryContext.getOrComputeSharedValue(ArrayLiteralTransformFunction.class,
-              expression.getFunction().getArguments(),
-              ArrayLiteralTransformFunction::new);
-        }
-
-        TransformFunction transformFunction;
-        Class<? extends TransformFunction> transformFunctionClass = TRANSFORM_FUNCTION_MAP.get(functionName);
-        if (transformFunctionClass != null) {
-          // Transform function
-          try {
-            transformFunction = transformFunctionClass.getDeclaredConstructor().newInstance();
-          } catch (Exception e) {
-            throw new RuntimeException("Caught exception while constructing transform function: " + functionName, e);
-          }
-        } else {
-          // Scalar function
-          FunctionInfo functionInfo = FunctionRegistry.getFunctionInfo(functionName, numArguments);
-          if (functionInfo == null) {
-            if (FunctionRegistry.containsFunction(functionName)) {
-              throw new BadQueryRequestException(
-                  String.format("Unsupported function: %s with %d parameters", functionName, numArguments));
-            } else {
-              throw new BadQueryRequestException(String.format("Unsupported function: %s not found", functionName));
-            }
-          }
-          transformFunction = new ScalarTransformFunctionWrapper(functionInfo);
-        }
-
-        List<TransformFunction> transformFunctionArguments = new ArrayList<>(numArguments);
-        for (ExpressionContext argument : arguments) {
-          transformFunctionArguments.add(TransformFunctionFactory.get(argument, columnContextMap, queryContext));
-        }
-        try {
-          transformFunction.init(transformFunctionArguments, columnContextMap, queryContext.isNullHandlingEnabled());
-        } catch (Exception e) {
-          throw new BadQueryRequestException("Caught exception while initializing transform function: " + functionName,
-              e);
-        }
-        return transformFunction;
+        return getFunctionTransformFunction(expression, columnContextMap, queryContext);
       case IDENTIFIER:
         String columnName = expression.getIdentifier();
         return new IdentifierTransformFunction(columnName, columnContextMap.get(columnName));
@@ -347,6 +302,66 @@ public class TransformFunctionFactory {
       default:
         throw new IllegalStateException();
     }
+  }
+
+  private static TransformFunction getFunctionTransformFunction(ExpressionContext expression,
+      Map<String, ColumnContext> columnContextMap, QueryContext queryContext) {
+    FunctionContext function = expression.getFunction();
+    String functionName = canonicalize(function.getFunctionName());
+    List<ExpressionContext> arguments = function.getArguments();
+    int numArguments = arguments.size();
+
+    if (functionName.equalsIgnoreCase(ArrayLiteralTransformFunction.FUNCTION_NAME)) {
+      return queryContext.getOrComputeSharedValue(ArrayLiteralTransformFunction.class,
+          expression.getFunction().getArguments(),
+          ArrayLiteralTransformFunction::new);
+    }
+
+    TransformFunction transformFunction;
+    Class<? extends TransformFunction> transformFunctionClass = TRANSFORM_FUNCTION_MAP.get(functionName);
+    if (transformFunctionClass != null) {
+      transformFunction = getTransformFunctionInstance(functionName, transformFunctionClass);
+    } else {
+      transformFunction = getScalarTransformFunction(functionName, numArguments);
+    }
+
+    List<TransformFunction> transformFunctionArguments = new ArrayList<>(numArguments);
+    for (ExpressionContext argument : arguments) {
+      transformFunctionArguments
+          .add(TransformFunctionFactory.get(argument, columnContextMap, queryContext));
+    }
+    try {
+      transformFunction.init(transformFunctionArguments, columnContextMap, queryContext.isNullHandlingEnabled());
+    } catch (Exception e) {
+      throw new BadQueryRequestException("Caught exception while initializing transform function: " + functionName,
+          e);
+    }
+    return transformFunction;
+  }
+
+  private static TransformFunction getScalarTransformFunction(String functionName, int numArguments) {
+    FunctionInfo functionInfo = FunctionRegistry.getFunctionInfo(functionName, numArguments);
+    if (functionInfo == null) {
+      if (FunctionRegistry.containsFunction(functionName)) {
+        throw new BadQueryRequestException(
+            String.format("Unsupported function: %s with %d parameters", functionName, numArguments));
+      } else {
+        throw new BadQueryRequestException(String.format("Unsupported function: %s not found", functionName));
+      }
+    }
+    return new ScalarTransformFunctionWrapper(functionInfo);
+  }
+
+  private static TransformFunction getTransformFunctionInstance(String functionName,
+      Class<? extends TransformFunction> transformFunctionClass) {
+    try {
+      return transformFunctionClass.getDeclaredConstructor().newInstance();
+    } catch (Exception e) {
+      throw new RuntimeException("Caught exception while constructing transform function: " + functionName, e);
+    }
+  }
+
+//Refactoring end
   }
 
   @VisibleForTesting

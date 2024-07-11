@@ -338,28 +338,51 @@ public class PinotInstanceAssignmentRestletResource {
           Response.Status.BAD_REQUEST);
     }
 
+    return processInstancePartitions(tableName, instancePartitions);
+  }
+
+  private Map<String, InstancePartitions> processInstancePartitions(String tableName,
+      InstancePartitions instancePartitions) {
     String instancePartitionsName = instancePartitions.getInstancePartitionsName();
     String rawTableName = TableNameBuilder.extractRawTableName(tableName);
     TableType tableType = TableNameBuilder.getTableTypeFromTableName(tableName);
-    if (tableType != TableType.REALTIME) {
-      if (InstancePartitionsType.OFFLINE.getInstancePartitionsName(rawTableName).equals(instancePartitionsName)) {
-        persistInstancePartitionsHelper(instancePartitions);
-        return Collections.singletonMap(InstancePartitionsType.OFFLINE.toString(), instancePartitions);
-      }
+
+    if (tableType != TableType.REALTIME && InstancePartitionsType.OFFLINE.getInstancePartitionsName(rawTableName)
+        .equals(instancePartitionsName)) {
+      persistInstancePartitionsHelper(instancePartitions);
+      return Collections.singletonMap(InstancePartitionsType.OFFLINE.toString(), instancePartitions);
     }
+
     if (tableType != TableType.OFFLINE) {
-      if (InstancePartitionsType.CONSUMING.getInstancePartitionsName(rawTableName).equals(instancePartitionsName)) {
-        persistInstancePartitionsHelper(instancePartitions);
-        return Collections.singletonMap(InstancePartitionsType.CONSUMING.toString(), instancePartitions);
-      }
-      if (InstancePartitionsType.COMPLETED.getInstancePartitionsName(rawTableName).equals(instancePartitionsName)) {
-        persistInstancePartitionsHelper(instancePartitions);
-        return Collections.singletonMap(InstancePartitionsType.COMPLETED.toString(), instancePartitions);
+      Map<String, InstancePartitions> result =
+          processRealtimeInstancePartitions(rawTableName, instancePartitionsName, instancePartitions);
+      if (result != null) {
+        return result;
       }
     }
 
-    List<TableConfig> tableConfigs = Arrays.asList(_resourceManager.getRealtimeTableConfig(tableName),
-        _resourceManager.getOfflineTableConfig(tableName));
+    return processTierInstancePartitions(tableName, instancePartitionsName, instancePartitions);
+  }
+
+  private Map<String, InstancePartitions> processRealtimeInstancePartitions(String rawTableName,
+      String instancePartitionsName, InstancePartitions instancePartitions) {
+    if (InstancePartitionsType.CONSUMING.getInstancePartitionsName(rawTableName)
+        .equals(instancePartitionsName)) {
+      persistInstancePartitionsHelper(instancePartitions);
+      return Collections.singletonMap(InstancePartitionsType.CONSUMING.toString(), instancePartitions);
+    }
+    if (InstancePartitionsType.COMPLETED.getInstancePartitionsName(rawTableName)
+        .equals(instancePartitionsName)) {
+      persistInstancePartitionsHelper(instancePartitions);
+      return Collections.singletonMap(InstancePartitionsType.COMPLETED.toString(), instancePartitions);
+    }
+    return null;
+  }
+
+  private Map<String, InstancePartitions> processTierInstancePartitions(String tableName,
+      String instancePartitionsName, InstancePartitions instancePartitions) {
+    List<TableConfig> tableConfigs =
+        Arrays.asList(_resourceManager.getRealtimeTableConfig(tableName), _resourceManager.getOfflineTableConfig(tableName));
 
     for (TableConfig tableConfig : tableConfigs) {
       if (tableConfig != null && CollectionUtils.isNotEmpty(tableConfig.getTierConfigsList())) {
@@ -376,6 +399,8 @@ public class PinotInstanceAssignmentRestletResource {
     throw new ControllerApplicationException(LOGGER, "Instance partitions cannot be applied to the table",
         Response.Status.BAD_REQUEST);
   }
+
+//Refactoring end
 
   @DELETE
   @Produces(MediaType.APPLICATION_JSON)

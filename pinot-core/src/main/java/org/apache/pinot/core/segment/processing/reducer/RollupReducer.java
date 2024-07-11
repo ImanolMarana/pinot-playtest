@@ -87,13 +87,7 @@ public class RollupReducer implements Reducer {
 
     List<FieldSpec> fieldSpecs = _fileManager.getFieldSpecs();
     boolean includeNullFields = _fileManager.isIncludeNullFields();
-    List<AggregatorContext> aggregatorContextList = new ArrayList<>();
-    for (FieldSpec fieldSpec : fieldSpecs) {
-      if (fieldSpec.getFieldType() == FieldType.METRIC) {
-        aggregatorContextList.add(new AggregatorContext(fieldSpec,
-            _aggregationTypes.getOrDefault(fieldSpec.getName(), DEFAULT_AGGREGATOR_TYPE)));
-      }
-    }
+    List<AggregatorContext> aggregatorContextList = createAggregatorContextList(fieldSpecs);
 
     File partitionOutputDir = new File(_reducerOutputDir, _partitionId);
     FileUtils.forceMkdir(partitionOutputDir);
@@ -101,27 +95,100 @@ public class RollupReducer implements Reducer {
     long rollupFileCreationStartTimeMs = System.currentTimeMillis();
     _rollupFileManager = new GenericRowFileManager(partitionOutputDir, fieldSpecs, includeNullFields, 0);
     GenericRowFileWriter rollupFileWriter = _rollupFileManager.getFileWriter();
+
+    processRows(numRows, recordReader, includeNullFields, rollupFileWriter, aggregatorContextList);
+
+    rollupFileWriter.write(previousRow);
+    _rollupFileManager.closeFileWriter();
+    LOGGER.info("Finish creating rollup file in {}ms", System.currentTimeMillis() - rollupFileCreationStartTimeMs);
+
+    _fileManager.cleanUp();
+    LOGGER.info("Finish reducing in {}ms", System.currentTimeMillis() - reduceStartTimeMs);
+    return _rollupFileManager;
+  }
+
+  private List<AggregatorContext> createAggregatorContextList(List<FieldSpec> fieldSpecs) {
+    List<AggregatorContext> aggregatorContextList = new ArrayList<>();
+    for (FieldSpec fieldSpec : fieldSpecs) {
+      if (fieldSpec.getFieldType() == FieldType.METRIC) {
+        aggregatorContextList.add(new AggregatorContext(fieldSpec,
+            _aggregationTypes.getOrDefault(fieldSpec.getName(), DEFAULT_AGGREGATOR_TYPE)));
+      }
+    }
+    return aggregatorContextList;
+  }
+
+  private void processRows(int numRows, GenericRowFileRecordReader recordReader, boolean includeNullFields,
+      GenericRowFileWriter rollupFileWriter, List<AggregatorContext> aggregatorContextList)
+      throws Exception {
     GenericRow previousRow = new GenericRow();
     recordReader.read(0, previousRow);
     int previousRowId = 0;
     GenericRow buffer = new GenericRow();
-    if (includeNullFields) {
-      for (int i = 1; i < numRows; i++) {
-        buffer.clear();
-        recordReader.read(i, buffer);
-        if (recordReader.compare(previousRowId, i) == 0) {
-          aggregateWithNullFields(previousRow, buffer, aggregatorContextList);
-        } else {
-          rollupFileWriter.write(previousRow);
-          previousRowId = i;
-          GenericRow temp = previousRow;
-          previousRow = buffer;
-          buffer = temp;
-        }
+    for (int i = 1; i < numRows; i++) {
+      buffer.clear();
+      recordReader.read(i, buffer);
+      if (recordReader.compare(previousRowId, i) == 0) {
+        aggregateRow(previousRow, buffer, aggregatorContextList, includeNullFields);
+      } else {
+        rollupFileWriter.write(previousRow);
+        previousRowId = i;
+        GenericRow temp = previousRow;
+        previousRow = buffer;
+        buffer = temp;
       }
+    }
+  }
+
+  private void aggregateRow(GenericRow aggregatedRow, GenericRow rowToAggregate,
+      List<AggregatorContext> aggregatorContextList, boolean includeNullFields) {
+    if (includeNullFields) {
+      aggregateWithNullFields(aggregatedRow, rowToAggregate, aggregatorContextList);
     } else {
-      for (int i = 1; i < numRows; i++) {
-        buffer.clear();
+      aggregateWithoutNullFields(aggregatedRow, rowToAggregate, aggregatorContextList);
+    }
+  }
+
+  private static void aggregateWithNullFields(GenericRow aggregatedRow, GenericRow rowToAggregate,
+      List<AggregatorContext> aggregatorContextList) {
+    for (AggregatorContext aggregatorContext : aggregatorContextList) {
+      String column = aggregatorContext._column;
+
+      // Skip aggregating on null fields
+      if (rowToAggregate.isNullValue(column)) {
+        continue;
+      }
+
+      if (aggregatedRow.removeNullValueField(column)) {
+        // Null field, directly put new value
+        aggregatedRow.putValue(column, rowToAggregate.getValue(column));
+      } else {
+        // Non-null field, aggregate the value
+        aggregatedRow.putValue(column,
+            aggregatorContext._aggregator.aggregate(aggregatedRow.getValue(column), rowToAggregate.getValue(column)));
+      }
+    }
+  }
+
+  private static void aggregateWithoutNullFields(GenericRow aggregatedRow, GenericRow rowToAggregate,
+      List<AggregatorContext> aggregatorContextList) {
+    for (AggregatorContext aggregatorContext : aggregatorContextList) {
+      String column = aggregatorContext._column;
+      aggregatedRow.putValue(column,
+          aggregatorContext._aggregator.aggregate(aggregatedRow.getValue(column), rowToAggregate.getValue(column)));
+    }
+  }
+
+  private static class AggregatorContext {
+    final String _column;
+    final ValueAggregator _aggregator;
+
+    AggregatorContext(FieldSpec fieldSpec, AggregationFunctionType aggregationType) {
+      _column = fieldSpec.getName();
+      _aggregator = ValueAggregatorFactory.getValueAggregator(aggregationType, fieldSpec.getDataType());
+    }
+  }
+//Refactoring end
         recordReader.read(i, buffer);
         if (recordReader.compare(previousRowId, i) == 0) {
           aggregateWithoutNullFields(previousRow, buffer, aggregatorContextList);

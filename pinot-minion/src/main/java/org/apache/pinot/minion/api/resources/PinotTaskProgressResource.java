@@ -101,45 +101,57 @@ public class PinotTaskProgressResource {
       @ApiParam(value = "Sub task names separated by comma") @QueryParam("subtaskNames") @Nullable String subtaskNames,
       @ApiParam(value = "Subtask state", required = true) @QueryParam("subTaskState") @Nullable String subTaskState) {
     try {
-      Map<String, MinionEventObserver> progress = new HashMap<>();
-      if (StringUtils.isEmpty(subtaskNames) && StringUtils.isEmpty(subTaskState)) {
-        LOGGER.debug("Getting progress of all subtasks");
-        progress.putAll(MinionEventObservers.getInstance().getMinionEventObservers());
-      } else if (!StringUtils.isEmpty(subtaskNames) && !StringUtils.isEmpty(subTaskState)) {
-        throw new Exception("Subtask names and state should not be specified at the same time");
-      } else if (!StringUtils.isEmpty(subTaskState)) {
-        MinionTaskState minionTaskState = MinionTaskState.IN_PROGRESS;
-        try {
-          minionTaskState = MinionTaskState.valueOf(subTaskState.toUpperCase());
-        } catch (IllegalArgumentException e) {
-          LOGGER.warn("{} is not a valid subtask state, defaulting to IN_PROGRESS", subTaskState);
-          subTaskState = MinionTaskState.IN_PROGRESS.toString();
-        }
-        LOGGER.debug("Getting progress for subtasks with state {}", subTaskState);
-        progress.putAll(MinionEventObservers.getInstance().getMinionEventObserverWithGivenState(minionTaskState));
-      } else {
-        // !StringUtils.isEmpty(subtaskNames) is true
-        LOGGER.debug("Getting progress for subtasks: {}", subtaskNames);
-        List<String> subTaskNames =
-            Arrays.stream(StringUtils.split(subtaskNames, CommonConstants.Minion.TASK_LIST_SEPARATOR))
-                .map(String::trim)
-                .collect(Collectors.toList());
-        for (String subtaskName : subTaskNames) {
-          MinionEventObserver observer = MinionEventObservers.getInstance().getMinionEventObserver(subtaskName);
-          if (observer != null) {
-            progress.put(subtaskName, observer);
-          }
-        }
-      }
+      Map<String, MinionEventObserver> progress = getSubtaskProgressInternal(subtaskNames, subTaskState);
       LOGGER.debug("Got subtasks progress: {}", progress);
       return JsonUtils.objectToString(progress);
     } catch (Exception e) {
       throw new WebApplicationException(Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(
-              String.format("Failed to get task progress for subtasks %s with state %s due to error: %s",
-                  StringUtils.isEmpty(subtaskNames) ? "NOT_SPECIFIED" : subtaskNames,
-                  StringUtils.isEmpty(subTaskState) ? "NOT_SPECIFIED" : subTaskState,
-                  e.getMessage()))
+          String.format("Failed to get task progress for subtasks %s with state %s due to error: %s",
+              StringUtils.isEmpty(subtaskNames) ? "NOT_SPECIFIED" : subtaskNames,
+              StringUtils.isEmpty(subTaskState) ? "NOT_SPECIFIED" : subTaskState,
+              e.getMessage()))
           .build());
     }
   }
+  
+  private Map<String, MinionEventObserver> getSubtaskProgressInternal(@Nullable String subtaskNames,
+      @Nullable String subTaskState) throws Exception {
+    Map<String, MinionEventObserver> progress = new HashMap<>();
+    if (StringUtils.isEmpty(subtaskNames) && StringUtils.isEmpty(subTaskState)) {
+      LOGGER.debug("Getting progress of all subtasks");
+      progress.putAll(MinionEventObservers.getInstance().getMinionEventObservers());
+    } else if (!StringUtils.isEmpty(subtaskNames) && !StringUtils.isEmpty(subTaskState)) {
+      throw new Exception("Subtask names and state should not be specified at the same time");
+    } else if (!StringUtils.isEmpty(subTaskState)) {
+      progress.putAll(getSubtaskProgressByState(subTaskState));
+    } else {
+      // !StringUtils.isEmpty(subtaskNames) is true
+      LOGGER.debug("Getting progress for subtasks: {}", subtaskNames);
+      List<String> subTaskNamesList =
+          Arrays.stream(StringUtils.split(subtaskNames, CommonConstants.Minion.TASK_LIST_SEPARATOR))
+              .map(String::trim)
+              .collect(Collectors.toList());
+      for (String subtaskName : subTaskNamesList) {
+        MinionEventObserver observer = MinionEventObservers.getInstance().getMinionEventObserver(subtaskName);
+        if (observer != null) {
+          progress.put(subtaskName, observer);
+        }
+      }
+    }
+    return progress;
+  }
+
+  private Map<String, MinionEventObserver> getSubtaskProgressByState(String subTaskState) {
+    MinionTaskState minionTaskState = MinionTaskState.IN_PROGRESS;
+    try {
+      minionTaskState = MinionTaskState.valueOf(subTaskState.toUpperCase());
+    } catch (IllegalArgumentException e) {
+      LOGGER.warn("{} is not a valid subtask state, defaulting to IN_PROGRESS", subTaskState);
+      subTaskState = MinionTaskState.IN_PROGRESS.toString();
+    }
+    LOGGER.debug("Getting progress for subtasks with state {}", subTaskState);
+    return MinionEventObservers.getInstance().getMinionEventObserverWithGivenState(minionTaskState);
+  }
+
+//Refactoring end
 }

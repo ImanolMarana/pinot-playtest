@@ -202,34 +202,9 @@ public class ConcurrentMapPartitionUpsertMetadataManager extends BasePartitionUp
     AtomicInteger numMetadataTTLKeysRemoved = new AtomicInteger();
     AtomicInteger numDeletedTTLKeysRemoved = new AtomicInteger();
     double largestSeenComparisonValue = _largestSeenComparisonValue.get();
-    double metadataTTLKeysThreshold;
-    if (_metadataTTL > 0) {
-      metadataTTLKeysThreshold = largestSeenComparisonValue - _metadataTTL;
-    } else {
-      metadataTTLKeysThreshold = Double.MIN_VALUE;
-    }
-    double deletedKeysThreshold;
-    if (_deletedKeysTTL > 0) {
-      deletedKeysThreshold = largestSeenComparisonValue - _deletedKeysTTL;
-    } else {
-      deletedKeysThreshold = Double.MIN_VALUE;
-    }
 
-    _primaryKeyToRecordLocationMap.forEach((primaryKey, recordLocation) -> {
-      double comparisonValue = ((Number) recordLocation.getComparisonValue()).doubleValue();
-      if (_metadataTTL > 0 && comparisonValue < metadataTTLKeysThreshold) {
-        _primaryKeyToRecordLocationMap.remove(primaryKey, recordLocation);
-        numMetadataTTLKeysRemoved.getAndIncrement();
-      } else if (_deletedKeysTTL > 0 && comparisonValue < deletedKeysThreshold) {
-        ThreadSafeMutableRoaringBitmap currentQueryableDocIds = recordLocation.getSegment().getQueryableDocIds();
-        // if key not part of queryable doc id, it means it is deleted
-        if (currentQueryableDocIds != null && !currentQueryableDocIds.contains(recordLocation.getDocId())) {
-          _primaryKeyToRecordLocationMap.remove(primaryKey, recordLocation);
-          removeDocId(recordLocation.getSegment(), recordLocation.getDocId());
-          numDeletedTTLKeysRemoved.getAndIncrement();
-        }
-      }
-    });
+    removeExpiredKeys(numMetadataTTLKeysRemoved, numDeletedTTLKeysRemoved, largestSeenComparisonValue);
+
     if (_metadataTTL > 0) {
       persistWatermark(largestSeenComparisonValue);
     }
@@ -249,6 +224,30 @@ public class ConcurrentMapPartitionUpsertMetadataManager extends BasePartitionUp
           numDeletedTTLKeys);
     }
   }
+
+  private void removeExpiredKeys(AtomicInteger numMetadataTTLKeysRemoved, AtomicInteger numDeletedTTLKeysRemoved,
+      double largestSeenComparisonValue) {
+    double metadataTTLKeysThreshold =
+        _metadataTTL > 0 ? largestSeenComparisonValue - _metadataTTL : Double.MIN_VALUE;
+    double deletedKeysThreshold = _deletedKeysTTL > 0 ? largestSeenComparisonValue - _deletedKeysTTL : Double.MIN_VALUE;
+
+    _primaryKeyToRecordLocationMap.forEach((primaryKey, recordLocation) -> {
+      double comparisonValue = ((Number) recordLocation.getComparisonValue()).doubleValue();
+      if (_metadataTTL > 0 && comparisonValue < metadataTTLKeysThreshold) {
+        _primaryKeyToRecordLocationMap.remove(primaryKey, recordLocation);
+        numMetadataTTLKeysRemoved.getAndIncrement();
+      } else if (_deletedKeysTTL > 0 && comparisonValue < deletedKeysThreshold) {
+        ThreadSafeMutableRoaringBitmap currentQueryableDocIds = recordLocation.getSegment().getQueryableDocIds();
+        // if key not part of queryable doc id, it means it is deleted
+        if (currentQueryableDocIds != null && !currentQueryableDocIds.contains(recordLocation.getDocId())) {
+          _primaryKeyToRecordLocationMap.remove(primaryKey, recordLocation);
+          removeDocId(recordLocation.getSegment(), recordLocation.getDocId());
+          numDeletedTTLKeysRemoved.getAndIncrement();
+        }
+      }
+    });
+  }
+//Refactoring end
 
   @Override
   protected boolean doAddRecord(MutableSegment segment, RecordInfo recordInfo) {

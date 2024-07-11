@@ -53,30 +53,43 @@ public class MultiplicationTransformFunction extends BaseTransformFunction {
 
     _resultDataType = DataType.DOUBLE;
     for (TransformFunction argument : arguments) {
-      if (argument instanceof LiteralTransformFunction) {
-        LiteralTransformFunction literalTransformFunction = (LiteralTransformFunction) argument;
-        DataType dataType = literalTransformFunction.getResultMetadata().getDataType();
-        if (dataType == DataType.BIG_DECIMAL) {
-          _literalBigDecimalProduct =
-              _literalBigDecimalProduct.multiply(literalTransformFunction.getBigDecimalLiteral());
-          _resultDataType = DataType.BIG_DECIMAL;
-        } else {
-          _literalDoubleProduct *= ((LiteralTransformFunction) argument).getDoubleLiteral();
-        }
-      } else {
-        if (!argument.getResultMetadata().isSingleValue()) {
-          throw new IllegalArgumentException("All the arguments of MULT transform function must be single-valued");
-        }
-        if (argument.getResultMetadata().getDataType() == DataType.BIG_DECIMAL) {
-          _resultDataType = DataType.BIG_DECIMAL;
-        }
-        _transformFunctions.add(argument);
-      }
+      processArgument(argument);
     }
     if (_resultDataType == DataType.BIG_DECIMAL) {
       _literalBigDecimalProduct = _literalBigDecimalProduct.multiply(BigDecimal.valueOf(_literalDoubleProduct));
     }
   }
+  
+  private void processArgument(TransformFunction argument) {
+    if (argument instanceof LiteralTransformFunction) {
+      processLiteralArgument((LiteralTransformFunction) argument);
+    } else {
+      processNonLiteralArgument(argument);
+    }
+  }
+  
+  private void processLiteralArgument(LiteralTransformFunction literalTransformFunction) {
+    DataType dataType = literalTransformFunction.getResultMetadata().getDataType();
+    if (dataType == DataType.BIG_DECIMAL) {
+      _literalBigDecimalProduct =
+          _literalBigDecimalProduct.multiply(literalTransformFunction.getBigDecimalLiteral());
+      _resultDataType = DataType.BIG_DECIMAL;
+    } else {
+      _literalDoubleProduct *= literalTransformFunction.getDoubleLiteral();
+    }
+  }
+  
+  private void processNonLiteralArgument(TransformFunction argument) {
+    if (!argument.getResultMetadata().isSingleValue()) {
+      throw new IllegalArgumentException("All the arguments of MULT transform function must be single-valued");
+    }
+    if (argument.getResultMetadata().getDataType() == DataType.BIG_DECIMAL) {
+      _resultDataType = DataType.BIG_DECIMAL;
+    }
+    _transformFunctions.add(argument);
+  }
+
+//Refactoring end
 
   @Override
   public TransformResultMetadata getResultMetadata() {

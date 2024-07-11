@@ -357,59 +357,74 @@ public abstract class BaseDefaultColumnHandler implements DefaultColumnHandler {
       List<TransformConfig> transformConfigs = tableConfig.getIngestionConfig().getTransformConfigs();
       for (TransformConfig transformConfig : transformConfigs) {
         if (transformConfig.getColumnName().equals(column)) {
-          String transformFunction = transformConfig.getTransformFunction();
-          FunctionEvaluator functionEvaluator = FunctionEvaluatorFactory.getExpressionEvaluator(transformFunction);
-
-          // Check if all arguments exist in the segment
-          // TODO: Support chained derived column
-          List<String> arguments = functionEvaluator.getArguments();
-          List<ColumnMetadata> argumentsMetadata = new ArrayList<>(arguments.size());
-          for (String argument : arguments) {
-            ColumnMetadata columnMetadata = _segmentMetadata.getColumnMetadataFor(argument);
-            if (columnMetadata == null) {
-              LOGGER.warn("Assigning default value to derived column: {} because argument: {} does not exist in the "
-                  + "segment", column, argument);
-              createDefaultValueColumnV1Indices(column);
-              return true;
-            }
-            // TODO: Support creation of derived columns from forward index disabled columns
-            if (!_segmentWriter.hasIndexFor(argument, StandardIndexes.forward())) {
-              throw new UnsupportedOperationException(String.format("Operation not supported! Cannot create a derived "
-                  + "column %s because argument: %s does not have a forward index. Enable forward index and "
-                  + "refresh/backfill the segments to create a derived column from source column %s", column, argument,
-                  argument));
-            }
-            argumentsMetadata.add(columnMetadata);
-          }
-
-          // TODO: Support forward index disabled derived column
-          if (_indexLoadingConfig.getForwardIndexDisabledColumns().contains(column)) {
-            LOGGER.warn("Skip creating forward index disabled derived column: {}", column);
-            if (errorOnFailure) {
-              throw new UnsupportedOperationException(
-                  String.format("Failed to create forward index disabled derived column: %s", column));
-            }
-            return false;
-          }
-
-          try {
-            createDerivedColumnV1Indices(column, functionEvaluator, argumentsMetadata);
+          if (tryCreatingDerivedColumnV1Indices(column, transformConfig, errorOnFailure)) {
             return true;
-          } catch (Exception e) {
-            LOGGER.error("Caught exception while creating derived column: {} with transform function: {}", column,
-                transformFunction, e);
-            if (errorOnFailure) {
-              throw e;
-            }
-            return false;
           }
         }
       }
     }
-
     createDefaultValueColumnV1Indices(column);
     return true;
   }
+
+  private boolean tryCreatingDerivedColumnV1Indices(String column, TransformConfig transformConfig,
+      boolean errorOnFailure) {
+    try {
+      String transformFunction = transformConfig.getTransformFunction();
+      FunctionEvaluator functionEvaluator = FunctionEvaluatorFactory.getExpressionEvaluator(transformFunction);
+
+      List<ColumnMetadata> argumentsMetadata = getArgumetsMetadata(column, functionEvaluator);
+      if (argumentsMetadata == null) {
+        return true;
+      }
+
+      if (isForwardIndexDisabled(column)) {
+        LOGGER.warn("Skip creating forward index disabled derived column: {}", column);
+        if (errorOnFailure) {
+          throw new UnsupportedOperationException(
+              String.format("Failed to create forward index disabled derived column: %s", column));
+        }
+        return false;
+      }
+
+      createDerivedColumnV1Indices(column, functionEvaluator, argumentsMetadata);
+      return true;
+    } catch (Exception e) {
+      LOGGER.error("Caught exception while creating derived column: {} with transform function: {}", column,
+          transformConfig.getTransformFunction(), e);
+      if (errorOnFailure) {
+        throw e;
+      }
+      return false;
+    }
+  }
+
+  private List<ColumnMetadata> getArgumetsMetadata(String column, FunctionEvaluator functionEvaluator) {
+    // Check if all arguments exist in the segment
+    // TODO: Support chained derived column
+    List<String> arguments = functionEvaluator.getArguments();
+    List<ColumnMetadata> argumentsMetadata = new ArrayList<>(arguments.size());
+    for (String argument : arguments) {
+      ColumnMetadata columnMetadata = _segmentMetadata.getColumnMetadataFor(argument);
+      if (columnMetadata == null) {
+        LOGGER.warn("Assigning default value to derived column: {} because argument: {} does not exist in the "
+            + "segment", column, argument);
+        createDefaultValueColumnV1Indices(column);
+        return null;
+      }
+      // TODO: Support creation of derived columns from forward index disabled columns
+      if (!_segmentWriter.hasIndexFor(argument, StandardIndexes.forward())) {
+        throw new UnsupportedOperationException(String.format("Operation not supported! Cannot create a derived "
+            + "column %s because argument: %s does not have a forward index. Enable forward index and "
+            + "refresh/backfill the segments to create a derived column from source column %s", column,
+            argument,
+            argument));
+      }
+      argumentsMetadata.add(columnMetadata);
+    }
+    return argumentsMetadata;
+  }
+//Refactoring end
 
   /**
    * Check and return whether the forward index is disabled for a given column

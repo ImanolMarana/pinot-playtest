@@ -138,110 +138,156 @@ public class MinMaxValueBasedSelectionOrderByCombineOperator
     assert firstOrderByExpression.getExpression().getType() == ExpressionContext.Type.IDENTIFIER;
     boolean asc = firstOrderByExpression.isAsc();
 
-    // Keep a boundary value for the thread
-    // NOTE: The thread boundary value can be different from the global boundary value because thread boundary
-    //       value is updated after processing the segment, while global boundary value is updated after the
-    //       segment result is merged.
     Comparable threadBoundaryValue = null;
 
     int operatorId;
     while (_processingException.get() == null && (operatorId = _nextOperatorId.getAndIncrement()) < _numOperators) {
-      if (operatorId >= _endOperatorId.get()) {
-        _blockingQueue.offer(EMPTY_RESULTS_BLOCK);
+      if (shouldSkipOperator(operatorId)) {
         continue;
       }
 
-      // Calculate the boundary value from global boundary and thread boundary
-      Comparable boundaryValue = _globalBoundaryValue.get();
-      if (boundaryValue == null) {
-        boundaryValue = threadBoundaryValue;
-      } else {
-        if (threadBoundaryValue != null) {
-          if (asc) {
-            if (threadBoundaryValue.compareTo(boundaryValue) < 0) {
-              boundaryValue = threadBoundaryValue;
-            }
-          } else {
-            if (threadBoundaryValue.compareTo(boundaryValue) > 0) {
-              boundaryValue = threadBoundaryValue;
-            }
-          }
-        }
-      }
+      Comparable boundaryValue = calculateBoundaryValue(threadBoundaryValue);
 
       // Check if the segment can be skipped
-      MinMaxValueContext minMaxValueContext = _minMaxValueContexts.get(operatorId);
-      if (boundaryValue != null) {
-        if (asc) {
-          // For ascending order, no need to process more segments if the column min value is larger than the
-          // boundary value, or is equal to the boundary value and the there is only one order-by expression
-          if (minMaxValueContext._minValue != null) {
-            int result = minMaxValueContext._minValue.compareTo(boundaryValue);
-            if (result > 0 || (result == 0 && numOrderByExpressions == 1)) {
-              _endOperatorId.set(operatorId);
-              _blockingQueue.offer(EMPTY_RESULTS_BLOCK);
-              continue;
-            }
-          }
-        } else {
-          // For descending order, no need to process more segments if the column max value is smaller than the
-          // boundary value, or is equal to the boundary value and the there is only one order-by expression
-          if (minMaxValueContext._maxValue != null) {
-            int result = minMaxValueContext._maxValue.compareTo(boundaryValue);
-            if (result < 0 || (result == 0 && numOrderByExpressions == 1)) {
-              _endOperatorId.set(operatorId);
-              _blockingQueue.offer(EMPTY_RESULTS_BLOCK);
-              continue;
-            }
-          }
-        }
+      if (canSkipSegment(operatorId, boundaryValue, asc, numOrderByExpressions)) {
+        continue;
       }
 
       // Process the segment
-      Operator operator = minMaxValueContext._operator;
-      SelectionResultsBlock resultsBlock;
-      try {
-        if (operator instanceof AcquireReleaseColumnsSegmentOperator) {
-          ((AcquireReleaseColumnsSegmentOperator) operator).acquire();
-        }
-        resultsBlock = (SelectionResultsBlock) operator.nextBlock();
-      } finally {
-        if (operator instanceof AcquireReleaseColumnsSegmentOperator) {
-          ((AcquireReleaseColumnsSegmentOperator) operator).release();
-        }
-      }
-      Collection<Object[]> rows = resultsBlock.getRows();
-      if (rows != null && rows.size() >= _numRowsToKeep) {
-        // Segment result has enough rows, update the boundary value
-
-        Comparable segmentBoundaryValue;
-        if (rows instanceof PriorityQueue) {
-          // Results from SelectionOrderByOperator
-          assert ((PriorityQueue<Object[]>) rows).peek() != null;
-          segmentBoundaryValue = (Comparable) ((PriorityQueue<Object[]>) rows).peek()[0];
-        } else {
-          // Results from LinearSelectionOrderByOperator
-          assert rows instanceof List;
-          segmentBoundaryValue = (Comparable) ((List<Object[]>) rows).get(rows.size() - 1)[0];
-        }
-
-        if (boundaryValue == null) {
-          boundaryValue = segmentBoundaryValue;
-        } else {
-          if (asc) {
-            if (segmentBoundaryValue.compareTo(boundaryValue) < 0) {
-              boundaryValue = segmentBoundaryValue;
-            }
-          } else {
-            if (segmentBoundaryValue.compareTo(boundaryValue) > 0) {
-              boundaryValue = segmentBoundaryValue;
-            }
-          }
-        }
-      }
-      threadBoundaryValue = boundaryValue;
-      _blockingQueue.offer(resultsBlock);
+      threadBoundaryValue = processSegmentAndUpdateBoundary(operatorId, boundaryValue, asc);
     }
+  }
+
+  private boolean shouldSkipOperator(int operatorId) {
+    if (operatorId >= _endOperatorId.get()) {
+      _blockingQueue.offer(EMPTY_RESULTS_BLOCK);
+      return true;
+    }
+    return false;
+  }
+
+  private Comparable calculateBoundaryValue(Comparable threadBoundaryValue) {
+    Comparable boundaryValue = _globalBoundaryValue.get();
+    if (boundaryValue == null) {
+      boundaryValue = threadBoundaryValue;
+    } else {
+      if (threadBoundaryValue != null) {
+        boundaryValue = updateBoundaryValue(threadBoundaryValue, boundaryValue);
+      }
+    }
+    return boundaryValue;
+  }
+
+  private Comparable updateBoundaryValue(Comparable threadBoundaryValue, Comparable boundaryValue) {
+    if (_queryContext.getOrderByExpressions().get(0).isAsc()) {
+      if (threadBoundaryValue.compareTo(boundaryValue) < 0) {
+        boundaryValue = threadBoundaryValue;
+      }
+    } else {
+      if (threadBoundaryValue.compareTo(boundaryValue) > 0) {
+        boundaryValue = threadBoundaryValue;
+      }
+    }
+    return boundaryValue;
+  }
+
+  private boolean canSkipSegment(int operatorId, Comparable boundaryValue, boolean asc, int numOrderByExpressions) {
+    MinMaxValueContext minMaxValueContext = _minMaxValueContexts.get(operatorId);
+    if (boundaryValue != null) {
+      if (asc) {
+        if (shouldSkipAscending(minMaxValueContext, boundaryValue, numOrderByExpressions)) {
+          return true;
+        }
+      } else {
+        if (shouldSkipDescending(minMaxValueContext, boundaryValue, numOrderByExpressions)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private boolean shouldSkipAscending(MinMaxValueContext minMaxValueContext, Comparable boundaryValue,
+      int numOrderByExpressions) {
+    if (minMaxValueContext._minValue != null) {
+      int result = minMaxValueContext._minValue.compareTo(boundaryValue);
+      if (result > 0 || (result == 0 && numOrderByExpressions == 1)) {
+        _endOperatorId.set(operatorId);
+        _blockingQueue.offer(EMPTY_RESULTS_BLOCK);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private boolean shouldSkipDescending(MinMaxValueContext minMaxValueContext, Comparable boundaryValue,
+      int numOrderByExpressions) {
+    if (minMaxValueContext._maxValue != null) {
+      int result = minMaxValueContext._maxValue.compareTo(boundaryValue);
+      if (result < 0 || (result == 0 && numOrderByExpressions == 1)) {
+        _endOperatorId.set(operatorId);
+        _blockingQueue.offer(EMPTY_RESULTS_BLOCK);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private Comparable processSegmentAndUpdateBoundary(int operatorId, Comparable boundaryValue, boolean asc) {
+    Operator operator = _minMaxValueContexts.get(operatorId)._operator;
+    SelectionResultsBlock resultsBlock;
+    try {
+      if (operator instanceof AcquireReleaseColumnsSegmentOperator) {
+        ((AcquireReleaseColumnsSegmentOperator) operator).acquire();
+      }
+      resultsBlock = (SelectionResultsBlock) operator.nextBlock();
+    } finally {
+      if (operator instanceof AcquireReleaseColumnsSegmentOperator) {
+        ((AcquireReleaseColumnsSegmentOperator) operator).release();
+      }
+    }
+    Collection<Object[]> rows = resultsBlock.getRows();
+    if (rows != null && rows.size() >= _numRowsToKeep) {
+      // Segment result has enough rows, update the boundary value
+      boundaryValue = updateBoundaryValue(boundaryValue, rows, asc);
+    }
+    _blockingQueue.offer(resultsBlock);
+    return boundaryValue;
+  }
+
+  private Comparable updateBoundaryValue(Comparable boundaryValue, Collection<Object[]> rows, boolean asc) {
+    Comparable segmentBoundaryValue;
+    if (rows instanceof PriorityQueue) {
+      // Results from SelectionOrderByOperator
+      assert ((PriorityQueue<Object[]>) rows).peek() != null;
+      segmentBoundaryValue = (Comparable) ((PriorityQueue<Object[]>) rows).peek()[0];
+    } else {
+      // Results from LinearSelectionOrderByOperator
+      assert rows instanceof List;
+      segmentBoundaryValue = (Comparable) ((List<Object[]>) rows).get(rows.size() - 1)[0];
+    }
+
+    if (boundaryValue == null) {
+      boundaryValue = segmentBoundaryValue;
+    } else {
+      boundaryValue = updateBoundaryValue(segmentBoundaryValue, boundaryValue, asc);
+    }
+    return boundaryValue;
+  }
+
+  private Comparable updateBoundaryValue(Comparable segmentBoundaryValue, Comparable boundaryValue, boolean asc) {
+    if (asc) {
+      if (segmentBoundaryValue.compareTo(boundaryValue) < 0) {
+        boundaryValue = segmentBoundaryValue;
+      }
+    } else {
+      if (segmentBoundaryValue.compareTo(boundaryValue) > 0) {
+        boundaryValue = segmentBoundaryValue;
+      }
+    }
+    return boundaryValue;
+  }
+//Refactoring end
   }
 
   /**

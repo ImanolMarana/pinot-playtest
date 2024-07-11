@@ -39,12 +39,7 @@ public class TextIndexConfigBuilder extends TextIndexConfig.AbstractBuilder {
   @Override
   public TextIndexConfig.AbstractBuilder withProperties(@Nullable Map<String, String> textIndexProperties) {
     if (textIndexProperties != null) {
-      if (Boolean.parseBoolean(textIndexProperties.get(FieldConfig.TEXT_INDEX_NO_RAW_DATA))) {
-        _rawValueForTextIndex = textIndexProperties.get(FieldConfig.TEXT_INDEX_RAW_VALUE);
-        if (_rawValueForTextIndex == null) {
-          _rawValueForTextIndex = FieldConfig.TEXT_INDEX_DEFAULT_RAW_VALUE;
-        }
-      }
+      handleRawDataConfig(textIndexProperties);
       _enableQueryCache = Boolean.parseBoolean(textIndexProperties.get(FieldConfig.TEXT_INDEX_ENABLE_QUERY_CACHE));
       _useANDForMultiTermQueries = Boolean.parseBoolean(
           textIndexProperties.get(FieldConfig.TEXT_INDEX_USE_AND_FOR_MULTI_TERM_QUERIES));
@@ -52,29 +47,43 @@ public class TextIndexConfigBuilder extends TextIndexConfig.AbstractBuilder {
       _stopWordsExclude = TextIndexUtils.extractStopWordsExclude(textIndexProperties);
       _enablePrefixSuffixMatchingInPhraseQueries =
           Boolean.parseBoolean(textIndexProperties.get(FieldConfig.TEXT_INDEX_ENABLE_PREFIX_SUFFIX_PHRASE_QUERIES));
-
-      if (textIndexProperties.get(FieldConfig.TEXT_INDEX_LUCENE_USE_COMPOUND_FILE) != null) {
-        _luceneUseCompoundFile =
-            Boolean.parseBoolean(textIndexProperties.get(FieldConfig.TEXT_INDEX_LUCENE_USE_COMPOUND_FILE));
-      }
-
-      if (textIndexProperties.get(FieldConfig.TEXT_INDEX_LUCENE_MAX_BUFFER_SIZE_MB) != null) {
-        _luceneMaxBufferSizeMB =
-            Integer.parseInt(textIndexProperties.get(FieldConfig.TEXT_INDEX_LUCENE_MAX_BUFFER_SIZE_MB));
-      }
-
-      if (textIndexProperties.get(FieldConfig.TEXT_INDEX_LUCENE_ANALYZER_CLASS) != null) {
-        _luceneAnalyzerClass = textIndexProperties.get(FieldConfig.TEXT_INDEX_LUCENE_ANALYZER_CLASS);
-      }
-
-      for (Map.Entry<String, String> entry : textIndexProperties.entrySet()) {
-        if (entry.getKey().equalsIgnoreCase(FieldConfig.TEXT_FST_TYPE)) {
-          _fstType = FSTType.NATIVE;
-        } else {
-          _fstType = FSTType.LUCENE;
-        }
-      }
+      handleLuceneConfig(textIndexProperties);
+      handleFstTypeConfig(textIndexProperties);
     }
     return this;
   }
+
+  private void handleRawDataConfig(Map<String, String> textIndexProperties) {
+    if (Boolean.parseBoolean(textIndexProperties.get(FieldConfig.TEXT_INDEX_NO_RAW_DATA))) {
+      _rawValueForTextIndex = textIndexProperties.get(FieldConfig.TEXT_INDEX_RAW_VALUE);
+      if (_rawValueForTextIndex == null) {
+        _rawValueForTextIndex = FieldConfig.TEXT_INDEX_DEFAULT_RAW_VALUE;
+      }
+    }
+  }
+
+  private void handleLuceneConfig(Map<String, String> textIndexProperties) {
+    if (textIndexProperties.get(FieldConfig.TEXT_INDEX_LUCENE_USE_COMPOUND_FILE) != null) {
+      _luceneUseCompoundFile =
+          Boolean.parseBoolean(textIndexProperties.get(FieldConfig.TEXT_INDEX_LUCENE_USE_COMPOUND_FILE));
+    }
+    if (textIndexProperties.get(FieldConfig.TEXT_INDEX_LUCENE_MAX_BUFFER_SIZE_MB) != null) {
+      _luceneMaxBufferSizeMB =
+          Integer.parseInt(textIndexProperties.get(FieldConfig.TEXT_INDEX_LUCENE_MAX_BUFFER_SIZE_MB));
+    }
+    if (textIndexProperties.get(FieldConfig.TEXT_INDEX_LUCENE_ANALYZER_CLASS) != null) {
+      _luceneAnalyzerClass = textIndexProperties.get(FieldConfig.TEXT_INDEX_LUCENE_ANALYZER_CLASS);
+    }
+  }
+
+  private void handleFstTypeConfig(Map<String, String> textIndexProperties) {
+    for (Map.Entry<String, String> entry : textIndexProperties.entrySet()) {
+      if (entry.getKey().equalsIgnoreCase(FieldConfig.TEXT_FST_TYPE)) {
+        _fstType = FSTType.NATIVE;
+      } else {
+        _fstType = FSTType.LUCENE;
+      }
+    }
+  }
+//Refactoring end
 }

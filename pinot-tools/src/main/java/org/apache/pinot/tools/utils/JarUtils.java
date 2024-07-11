@@ -39,17 +39,49 @@ public class JarUtils {
    */
   public static void copyResourcesToDirectory(String fromJarFilePath, String jarDir, String destDir)
       throws IOException {
+    fromJarFilePath = normalizeJarPath(fromJarFilePath);
+    String folderPath = jarDir.endsWith("/") ? jarDir : jarDir + "/";
+    String finalDestDir = destDir.endsWith("/") ? destDir : destDir + "/";
+    try (JarFile fromJar = new JarFile(fromJarFilePath)) {
+      for (Enumeration<JarEntry> entries = fromJar.entries(); entries.hasMoreElements(); ) {
+        JarEntry entry = entries.nextElement();
+        if (entry.getName().startsWith(folderPath) && !entry.isDirectory()) {
+          copyJarEntryToDirectory(fromJar, entry, finalDestDir, folderPath);
+        }
+      }
+    }
+  }
+
+  private static String normalizeJarPath(String fromJarFilePath) {
     if (fromJarFilePath.startsWith(JAR_PREFIX)) {
       fromJarFilePath = fromJarFilePath.substring(JAR_PREFIX.length());
     }
     if (fromJarFilePath.startsWith(FILE_PREFIX)) {
       fromJarFilePath = fromJarFilePath.substring(FILE_PREFIX.length());
     }
-    String folderPath = jarDir.endsWith("/") ? jarDir : jarDir + "/";
-    String finalDestDir = destDir.endsWith("/") ? destDir : destDir + "/";
-    try (JarFile fromJar = new JarFile(fromJarFilePath)) {
-      for (Enumeration<JarEntry> entries = fromJar.entries(); entries.hasMoreElements(); ) {
-        JarEntry entry = entries.nextElement();
+    return fromJarFilePath;
+  }
+
+  private static void copyJarEntryToDirectory(JarFile fromJar, JarEntry entry, String finalDestDir, String folderPath)
+      throws IOException {
+    File dest = new File(finalDestDir + entry.getName().substring(folderPath.length()));
+    File parent = dest.getParentFile();
+    if (parent != null) {
+      parent.mkdirs();
+    }
+
+    try (FileOutputStream out = new FileOutputStream(dest); InputStream in = fromJar.getInputStream(entry)) {
+      byte[] buffer = new byte[8 * 1024];
+
+      int s;
+      while ((s = in.read(buffer)) > 0) {
+        out.write(buffer, 0, s);
+      }
+    } catch (IOException e) {
+      throw new IOException("Could not copy asset from jar file", e);
+    }
+  }
+//Refactoring end
         if (entry.getName().startsWith(folderPath) && !entry.isDirectory()) {
           File dest = new File(finalDestDir + entry.getName().substring(folderPath.length()));
           File parent = dest.getParentFile();

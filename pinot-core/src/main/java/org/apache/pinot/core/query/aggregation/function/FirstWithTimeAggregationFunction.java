@@ -100,47 +100,58 @@ public abstract class FirstWithTimeAggregationFunction<V extends Comparable<V>>
     BlockValSet blockValSet = blockValSetMap.get(_expression);
     BlockValSet blockTimeSet = blockValSetMap.get(_timeCol);
     if (blockValSet.getValueType() != DataType.BYTES) {
-      IntLongPair defaultPair = new IntLongPair(Integer.MIN_VALUE, Long.MAX_VALUE);
-      long[] timeValues = blockTimeSet.getLongValuesSV();
-
-      IntIterator nullIdxIterator = orNullIterator(blockValSet, blockTimeSet);
-      IntLongPair bestPair = foldNotNull(length, nullIdxIterator, defaultPair, (pair, from, to) -> {
-        IntLongPair actualPair = pair;
-        for (int i = from; i < to; i++) {
-          long time = timeValues[i];
-          if (time <= actualPair.getTime()) {
-            actualPair = new IntLongPair(i, time);
-          }
-        }
-        return actualPair;
-      });
-      V bestValue;
-      if (bestPair.getValue() < 0) {
-        bestValue = getDefaultValueTimePair().getValue();
-      } else {
-        bestValue = readCell(blockValSet, bestPair.getValue());
-      }
-      setAggregationResult(aggregationResultHolder, bestValue, bestPair.getTime());
+      handleRawDataAggregation(length, aggregationResultHolder, blockValSet, blockTimeSet);
     } else {
-      // We assume bytes contain the binary serialization of FirstPair
-      ValueLongPair<V> defaultValueLongPair = getDefaultValueTimePair();
-
-      ValueLongPair<V> result = constructValueLongPair(defaultValueLongPair.getValue(), defaultValueLongPair.getTime());
-      byte[][] bytesValues = blockValSet.getBytesValuesSV();
-      forEachNotNull(length, blockValSet, (from, to) -> {
-        for (int i = from; i < to; i++) {
-          ValueLongPair<V> firstWithTimePair = _objectSerDe.deserialize(bytesValues[i]);
-          long time = firstWithTimePair.getTime();
-          if (time < result.getTime()) {
-            result.setTime(time);
-            result.setValue(firstWithTimePair.getValue());
-          }
-        }
-      });
-
-      setAggregationResult(aggregationResultHolder, result.getValue(), result.getTime());
+      handleSerializedAggregation(length, aggregationResultHolder, blockValSet);
     }
   }
+
+  private void handleRawDataAggregation(int length, AggregationResultHolder aggregationResultHolder,
+      BlockValSet blockValSet, BlockValSet blockTimeSet) {
+    IntLongPair defaultPair = new IntLongPair(Integer.MIN_VALUE, Long.MAX_VALUE);
+    long[] timeValues = blockTimeSet.getLongValuesSV();
+
+    IntIterator nullIdxIterator = orNullIterator(blockValSet, blockTimeSet);
+    IntLongPair bestPair = foldNotNull(length, nullIdxIterator, defaultPair, (pair, from, to) -> {
+      IntLongPair actualPair = pair;
+      for (int i = from; i < to; i++) {
+        long time = timeValues[i];
+        if (time <= actualPair.getTime()) {
+          actualPair = new IntLongPair(i, time);
+        }
+      }
+      return actualPair;
+    });
+    V bestValue;
+    if (bestPair.getValue() < 0) {
+      bestValue = getDefaultValueTimePair().getValue();
+    } else {
+      bestValue = readCell(blockValSet, bestPair.getValue());
+    }
+    setAggregationResult(aggregationResultHolder, bestValue, bestPair.getTime());
+  }
+
+  private void handleSerializedAggregation(int length, AggregationResultHolder aggregationResultHolder,
+      BlockValSet blockValSet) {
+    // We assume bytes contain the binary serialization of FirstPair
+    ValueLongPair<V> defaultValueLongPair = getDefaultValueTimePair();
+
+    ValueLongPair<V> result = constructValueLongPair(defaultValueLongPair.getValue(), defaultValueLongPair.getTime());
+    byte[][] bytesValues = blockValSet.getBytesValuesSV();
+    forEachNotNull(length, blockValSet, (from, to) -> {
+      for (int i = from; i < to; i++) {
+        ValueLongPair<V> firstWithTimePair = _objectSerDe.deserialize(bytesValues[i]);
+        long time = firstWithTimePair.getTime();
+        if (time < result.getTime()) {
+          result.setTime(time);
+          result.setValue(firstWithTimePair.getValue());
+        }
+      }
+    });
+
+    setAggregationResult(aggregationResultHolder, result.getValue(), result.getTime());
+  }
+//Refactoring end
 
   protected void setAggregationResult(AggregationResultHolder aggregationResultHolder, V data, long time) {
     ValueLongPair firstWithTimePair = aggregationResultHolder.getResult();

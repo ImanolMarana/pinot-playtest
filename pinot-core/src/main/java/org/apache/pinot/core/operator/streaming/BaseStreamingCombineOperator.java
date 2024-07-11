@@ -118,39 +118,63 @@ public abstract class BaseStreamingCombineOperator<T extends BaseResultsBlock> e
     int operatorId;
     Object tracker = createQuerySatisfiedTracker();
     while (_processingException.get() == null && (operatorId = _nextOperatorId.getAndIncrement()) < _numOperators) {
-      Operator<T> operator = _operators.get(operatorId);
-      try {
-        if (operator instanceof AcquireReleaseColumnsSegmentOperator) {
-          ((AcquireReleaseColumnsSegmentOperator) operator).acquire();
-        }
-        if (isChildOperatorSingleBlock()) {
-          T resultsBlock = operator.nextBlock();
-          addResultsBlock(resultsBlock);
-          // When query is satisfied, skip processing the remaining segments
-          if (isQuerySatisfied(resultsBlock, tracker)) {
-            _nextOperatorId.set(_numOperators);
-            return;
-          }
-        } else {
-          T resultsBlock;
-          while ((resultsBlock = operator.nextBlock()) != null) {
-            addResultsBlock(resultsBlock);
-            // When query is satisfied, skip processing the remaining segments
-            if (isQuerySatisfied(resultsBlock, tracker)) {
-              _nextOperatorId.set(_numOperators);
-              return;
-            }
-          }
-        }
-      } finally {
-        if (operator instanceof AcquireReleaseColumnsSegmentOperator) {
-          ((AcquireReleaseColumnsSegmentOperator) operator).release();
-        }
-      }
+      processOperator(operatorId, tracker);
       // offer the LAST_RESULTS_BLOCK indicate finish of the current operator.
       addResultsBlock(LAST_RESULTS_BLOCK);
     }
   }
+
+  private void processOperator(int operatorId, Object tracker) {
+    Operator<T> operator = _operators.get(operatorId);
+    try {
+      if (operator instanceof AcquireReleaseColumnsSegmentOperator) {
+        ((AcquireReleaseColumnsSegmentOperator) operator).acquire();
+      }
+      if (isChildOperatorSingleBlock()) {
+        processSingleBlockOperator(operator, tracker);
+      } else {
+        processMultiBlockOperator(operator, tracker);
+      }
+    } finally {
+      if (operator instanceof AcquireReleaseColumnsSegmentOperator) {
+        ((AcquireReleaseColumnsSegmentOperator) operator).release();
+      }
+    }
+  }
+
+  private void processSingleBlockOperator(Operator<T> operator, Object tracker) {
+    T resultsBlock = operator.nextBlock();
+    addResultsBlock(resultsBlock);
+    // When query is satisfied, skip processing the remaining segments
+    if (isQuerySatisfied(resultsBlock, tracker)) {
+      _nextOperatorId.set(_numOperators);
+    }
+  }
+
+  private void processMultiBlockOperator(Operator<T> operator, Object tracker) {
+    T resultsBlock;
+    while ((resultsBlock = operator.nextBlock()) != null) {
+      addResultsBlock(resultsBlock);
+      // When query is satisfied, skip processing the remaining segments
+      if (isQuerySatisfied(resultsBlock, tracker)) {
+        _nextOperatorId.set(_numOperators);
+        return;
+      }
+    }
+  }
+
+  // NOTE: Throw EarlyTerminationException when interrupted or timed out
+  private void addResultsBlock(BaseResultsBlock resultsBlock) {
+    try {
+      if (!_blockingQueue.offer(resultsBlock, _queryContext.getEndTimeMs() - System.currentTimeMillis(),
+          TimeUnit.MILLISECONDS)) {
+        throw new EarlyTerminationException("Timed out waiting to add results block");
+      }
+    } catch (InterruptedException e) {
+      throw new EarlyTerminationException("Interrupted waiting to add results block");
+    }
+  }
+//Refactoring end
 
   // NOTE: Throw EarlyTerminationException when interrupted or timed out
   private void addResultsBlock(BaseResultsBlock resultsBlock) {

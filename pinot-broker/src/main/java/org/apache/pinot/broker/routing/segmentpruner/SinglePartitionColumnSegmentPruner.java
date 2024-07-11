@@ -113,45 +113,60 @@ public class SinglePartitionColumnSegmentPruner implements SegmentPruner {
     List<Expression> operands = function.getOperands();
     switch (filterKind) {
       case AND:
-        for (Expression child : operands) {
-          if (!isPartitionMatch(child, partitionInfo)) {
-            return false;
-          }
-        }
-        return true;
+        return isPartitionMatchForAnd(operands, partitionInfo);
       case OR:
-        for (Expression child : operands) {
-          if (isPartitionMatch(child, partitionInfo)) {
-            return true;
-          }
-        }
-        return false;
-      case EQUALS: {
-        Identifier identifier = operands.get(0).getIdentifier();
-        if (identifier != null && identifier.getName().equals(_partitionColumn)) {
-          return partitionInfo.getPartitions().contains(partitionInfo.getPartitionFunction()
-              .getPartition(RequestContextUtils.getStringValue(operands.get(1))));
-        } else {
-          return true;
-        }
-      }
-      case IN: {
-        Identifier identifier = operands.get(0).getIdentifier();
-        if (identifier != null && identifier.getName().equals(_partitionColumn)) {
-          int numOperands = operands.size();
-          for (int i = 1; i < numOperands; i++) {
-            if (partitionInfo.getPartitions().contains(partitionInfo.getPartitionFunction()
-                .getPartition(RequestContextUtils.getStringValue(operands.get(i))))) {
-              return true;
-            }
-          }
-          return false;
-        } else {
-          return true;
-        }
-      }
+        return isPartitionMatchForOr(operands, partitionInfo);
+      case EQUALS:
+        return isPartitionMatchForEquals(operands, partitionInfo);
+      case IN:
+        return isPartitionMatchForIn(operands, partitionInfo);
       default:
         return true;
     }
   }
-}
+  
+  private boolean isPartitionMatchForAnd(List<Expression> operands, SegmentPartitionInfo partitionInfo) {
+    for (Expression child : operands) {
+      if (!isPartitionMatch(child, partitionInfo)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  
+  private boolean isPartitionMatchForOr(List<Expression> operands, SegmentPartitionInfo partitionInfo) {
+    for (Expression child : operands) {
+      if (isPartitionMatch(child, partitionInfo)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  
+  private boolean isPartitionMatchForEquals(List<Expression> operands, SegmentPartitionInfo partitionInfo) {
+    Identifier identifier = operands.get(0).getIdentifier();
+    if (identifier != null && identifier.getName().equals(_partitionColumn)) {
+      return partitionInfo.getPartitions().contains(partitionInfo.getPartitionFunction()
+          .getPartition(RequestContextUtils.getStringValue(operands.get(1))));
+    } else {
+      return true;
+    }
+  }
+  
+  private boolean isPartitionMatchForIn(List<Expression> operands, SegmentPartitionInfo partitionInfo) {
+    Identifier identifier = operands.get(0).getIdentifier();
+    if (identifier != null && identifier.getName().equals(_partitionColumn)) {
+      int numOperands = operands.size();
+      for (int i = 1; i < numOperands; i++) {
+        if (partitionInfo.getPartitions().contains(partitionInfo.getPartitionFunction()
+            .getPartition(RequestContextUtils.getStringValue(operands.get(i))))) {
+          return true;
+        }
+      }
+      return false;
+    } else {
+      return true;
+    }
+  }
+
+//Refactoring end

@@ -79,54 +79,70 @@ public class PinotOperatorTable extends SqlStdOperatorTable {
     // Ensure ArrayValueConstructor is registered before ArrayQueryConstructor
     register(ARRAY_VALUE_CONSTRUCTOR);
 
-    // TODO: reflection based registration is not ideal, we should use a static list of operators and register them
-    // Use reflection to register the expressions stored in public fields.
+    registerFunctionsFromFields();
+    registerAggregationFunctions();
+    registerTransformFunctions();
+  }
+
+  private void registerFunctionsFromFields() {
     for (Field field : getClass().getFields()) {
       try {
         if (SqlFunction.class.isAssignableFrom(field.getType())) {
-          SqlFunction op = (SqlFunction) field.get(this);
-          if (op != null && notRegistered(op)) {
-            register(op);
-          }
+          registerFunctionFromField(field);
         } else if (SqlOperator.class.isAssignableFrom(field.getType())) {
-          SqlOperator op = (SqlOperator) field.get(this);
-          if (op != null && notRegistered(op)) {
-            register(op);
-          }
+          registerOperatorFromField(field);
         }
       } catch (IllegalArgumentException | IllegalAccessException e) {
         throw Util.throwAsRuntime(Util.causeOrSelf(e));
       }
     }
+  }
 
-    // Walk through all the Pinot aggregation types and
-    //   1. register those that are supported in multistage in addition to calcite standard opt table.
-    //   2. register special handling that differs from calcite standard.
+  private void registerFunctionFromField(Field field)
+      throws IllegalArgumentException, IllegalAccessException {
+    SqlFunction op = (SqlFunction) field.get(this);
+    if (op != null && notRegistered(op)) {
+      register(op);
+    }
+  }
+
+  private void registerOperatorFromField(Field field)
+      throws IllegalArgumentException, IllegalAccessException {
+    SqlOperator op = (SqlOperator) field.get(this);
+    if (op != null && notRegistered(op)) {
+      register(op);
+    }
+  }
+
+  private void registerAggregationFunctions() {
     for (AggregationFunctionType aggregationFunctionType : AggregationFunctionType.values()) {
       if (aggregationFunctionType.getSqlKind() != null) {
-        // 1. Register the aggregation function with Calcite
         registerAggregateFunction(aggregationFunctionType.getName(), aggregationFunctionType);
-        // 2. Register the aggregation function with Calcite on all alternative names
-        List<String> alternativeFunctionNames = aggregationFunctionType.getAlternativeNames();
-        for (String alternativeFunctionName : alternativeFunctionNames) {
-          registerAggregateFunction(alternativeFunctionName, aggregationFunctionType);
-        }
+        registerAggregateFunctionAlternatives(aggregationFunctionType);
       }
     }
+  }
 
-    // Walk through all the Pinot transform types and
-    //   1. register those that are supported in multistage in addition to calcite standard opt table.
-    //   2. register special handling that differs from calcite standard.
+  private void registerAggregateFunctionAlternatives(AggregationFunctionType aggregationFunctionType) {
+    List<String> alternativeFunctionNames = aggregationFunctionType.getAlternativeNames();
+    for (String alternativeFunctionName : alternativeFunctionNames) {
+      registerAggregateFunction(alternativeFunctionName, aggregationFunctionType);
+    }
+  }
+
+  private void registerTransformFunctions() {
     for (TransformFunctionType transformFunctionType : TransformFunctionType.values()) {
       if (transformFunctionType.getSqlKind() != null) {
-        // 1. Register the transform function with Calcite
         registerTransformFunction(transformFunctionType.getName(), transformFunctionType);
-        // 2. Register the transform function with Calcite on all alternative names
-        List<String> alternativeFunctionNames = transformFunctionType.getAlternativeNames();
-        for (String alternativeFunctionName : alternativeFunctionNames) {
-          registerTransformFunction(alternativeFunctionName, transformFunctionType);
-        }
+        registerTransformFunctionAlternatives(transformFunctionType);
       }
+    }
+  }
+
+  private void registerTransformFunctionAlternatives(TransformFunctionType transformFunctionType) {
+    List<String> alternativeFunctionNames = transformFunctionType.getAlternativeNames();
+    for (String alternativeFunctionName : alternativeFunctionNames) {
+      registerTransformFunction(alternativeFunctionName, transformFunctionType);
     }
   }
 
@@ -168,5 +184,7 @@ public class PinotOperatorTable extends SqlStdOperatorTable {
     lookupOperatorOverloads(op.getNameAsId(), null, op.getSyntax(), operatorList,
         SqlNameMatchers.withCaseSensitive(false));
     return operatorList.size() == 0;
+  }
+//Refactoring end
   }
 }

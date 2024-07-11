@@ -139,40 +139,40 @@ public class SegmentPartitionMetadataManager implements SegmentZkMetadataFetchLi
     List<String> segmentsWithInvalidPartition = new ArrayList<>();
     List<Map.Entry<String, SegmentInfo>> newSegmentInfoEntries = new ArrayList<>();
     long currentTimeMs = System.currentTimeMillis();
+
     for (Map.Entry<String, SegmentInfo> entry : _segmentInfoMap.entrySet()) {
-      String segment = entry.getKey();
-      SegmentInfo segmentInfo = entry.getValue();
-      int partitionId = segmentInfo._partitionId;
-      if (partitionId == INVALID_PARTITION_ID) {
-        segmentsWithInvalidPartition.add(segment);
-        continue;
-      }
-      // Process new segments in the end
-      if (InstanceSelector.isNewSegment(segmentInfo._creationTimeMs, currentTimeMs)) {
-        newSegmentInfoEntries.add(entry);
-        continue;
-      }
-      List<String> onlineServers = segmentInfo._onlineServers;
-      PartitionInfo partitionInfo = partitionInfoMap[partitionId];
-      if (partitionInfo == null) {
-        Set<String> fullyReplicatedServers = new HashSet<>(onlineServers);
-        List<String> segments = new ArrayList<>();
-        segments.add(segment);
-        partitionInfo = new PartitionInfo(fullyReplicatedServers, segments);
-        partitionInfoMap[partitionId] = partitionInfo;
-        if (onlineServers.isEmpty()) {
-          LOGGER.warn("Found segment: {} without any available replica in table: {}, partition: {}", segment,
-              _tableNameWithType, partitionId);
-        }
-      } else {
-        if (partitionInfo._fullyReplicatedServers.retainAll(onlineServers)) {
-          LOGGER.warn("Found segment: {} with online servers: {} that reduces the fully replicated servers to: {} "
-                  + "in table: {}, partition: {}", segment, onlineServers, partitionInfo._fullyReplicatedServers,
-              _tableNameWithType, partitionId);
-        }
-        partitionInfo._segments.add(segment);
-      }
+      processSegmentInfo(entry, partitionInfoMap, segmentsWithInvalidPartition, newSegmentInfoEntries, currentTimeMs);
     }
+
+    handleSegmentsWithInvalidPartition(segmentsWithInvalidPartition);
+    handleNewSegments(partitionInfoMap, newSegmentInfoEntries);
+
+    _tablePartitionInfo =
+        new TablePartitionInfo(_tableNameWithType, _partitionColumn, _partitionFunctionName, _numPartitions,
+            partitionInfoMap, segmentsWithInvalidPartition);
+  }
+
+  private void processSegmentInfo(Map.Entry<String, SegmentInfo> entry, PartitionInfo[] partitionInfoMap,
+      List<String> segmentsWithInvalidPartition, List<Map.Entry<String, SegmentInfo>> newSegmentInfoEntries,
+      long currentTimeMs) {
+    String segment = entry.getKey();
+    SegmentInfo segmentInfo = entry.getValue();
+    int partitionId = segmentInfo._partitionId;
+
+    if (partitionId == INVALID_PARTITION_ID) {
+      segmentsWithInvalidPartition.add(segment);
+      return;
+    }
+
+    if (InstanceSelector.isNewSegment(segmentInfo._creationTimeMs, currentTimeMs)) {
+      newSegmentInfoEntries.add(entry);
+      return;
+    }
+
+    updatePartitionInfo(partitionInfoMap, segment, segmentInfo, partitionId);
+  }
+
+  private void handleSegmentsWithInvalidPartition(List<String> segmentsWithInvalidPartition) {
     if (!segmentsWithInvalidPartition.isEmpty()) {
       int numSegmentsWithInvalidPartition = segmentsWithInvalidPartition.size();
       if (numSegmentsWithInvalidPartition <= 10) {
@@ -183,55 +183,104 @@ public class SegmentPartitionMetadataManager implements SegmentZkMetadataFetchLi
             segmentsWithInvalidPartition.subList(0, 10), _tableNameWithType);
       }
     }
-    // Process new segments
-    if (!newSegmentInfoEntries.isEmpty()) {
-      List<String> excludedNewSegments = new ArrayList<>();
-      for (Map.Entry<String, SegmentInfo> entry : newSegmentInfoEntries) {
-        String segment = entry.getKey();
-        SegmentInfo segmentInfo = entry.getValue();
-        int partitionId = segmentInfo._partitionId;
-        List<String> onlineServers = segmentInfo._onlineServers;
-        PartitionInfo partitionInfo = partitionInfoMap[partitionId];
-        if (partitionInfo == null) {
-          // If the new segment is the first segment of a partition, treat it as regular segment if it has available
-          // replicas
-          if (!onlineServers.isEmpty()) {
-            Set<String> fullyReplicatedServers = new HashSet<>(onlineServers);
-            List<String> segments = new ArrayList<>();
-            segments.add(segment);
-            partitionInfo = new PartitionInfo(fullyReplicatedServers, segments);
-            partitionInfoMap[partitionId] = partitionInfo;
-          } else {
-            excludedNewSegments.add(segment);
-          }
-        } else {
-          // If the new segment is not the first segment of a partition, add it only if it won't reduce the fully
-          // replicated servers. It is common that a new created segment (newly pushed, or a new consuming segment)
-          // doesn't have all the replicas available yet, and we want to exclude it from the partition info until all
-          // the replicas are available.
-          //noinspection SlowListContainsAll
-          if (onlineServers.containsAll(partitionInfo._fullyReplicatedServers)) {
-            partitionInfo._segments.add(segment);
-          } else {
-            excludedNewSegments.add(segment);
-          }
-        }
-      }
-      if (!excludedNewSegments.isEmpty()) {
-        int numExcludedNewSegments = excludedNewSegments.size();
-        if (numExcludedNewSegments <= 10) {
-          LOGGER.info("Excluded {} new segments: {} without all replicas available in table: {}",
-              numExcludedNewSegments, excludedNewSegments, _tableNameWithType);
-        } else {
-          LOGGER.info("Excluded {} new segments: {}... without all replicas available in table: {}",
-              numExcludedNewSegments, excludedNewSegments.subList(0, 10), _tableNameWithType);
-        }
+  }
+
+  private void handleNewSegments(PartitionInfo[] partitionInfoMap,
+      List<Map.Entry<String, SegmentInfo>> newSegmentInfoEntries) {
+    if (newSegmentInfoEntries.isEmpty()) {
+      return;
+    }
+
+    List<String> excludedNewSegments = new ArrayList<>();
+    for (Map.Entry<String, SegmentInfo> entry : newSegmentInfoEntries) {
+      String segment = entry.getKey();
+      SegmentInfo segmentInfo = entry.getValue();
+      int partitionId = segmentInfo._partitionId;
+      List<String> onlineServers = segmentInfo._onlineServers;
+      PartitionInfo partitionInfo = partitionInfoMap[partitionId];
+
+      if (partitionInfo == null) {
+        handleNewSegmentForNewPartition(partitionInfoMap, segment, segmentInfo, partitionId, onlineServers,
+            excludedNewSegments);
+      } else {
+        handleNewSegmentForExistingPartition(partitionInfo, segment, onlineServers, excludedNewSegments);
       }
     }
-    _tablePartitionInfo =
-        new TablePartitionInfo(_tableNameWithType, _partitionColumn, _partitionFunctionName, _numPartitions,
-            partitionInfoMap, segmentsWithInvalidPartition);
+
+    logExcludedNewSegments(excludedNewSegments);
   }
+
+  private void updatePartitionInfo(PartitionInfo[] partitionInfoMap, String segment, SegmentInfo segmentInfo,
+      int partitionId) {
+    List<String> onlineServers = segmentInfo._onlineServers;
+    PartitionInfo partitionInfo = partitionInfoMap[partitionId];
+    if (partitionInfo == null) {
+      createNewPartitionInfo(partitionInfoMap, segment, onlineServers, partitionId);
+    } else {
+      updateExistingPartitionInfo(partitionInfo, segment, onlineServers, partitionId);
+    }
+  }
+
+  private void createNewPartitionInfo(PartitionInfo[] partitionInfoMap, String segment, List<String> onlineServers,
+      int partitionId) {
+    Set<String> fullyReplicatedServers = new HashSet<>(onlineServers);
+    List<String> segments = new ArrayList<>();
+    segments.add(segment);
+    PartitionInfo partitionInfo = new PartitionInfo(fullyReplicatedServers, segments);
+    partitionInfoMap[partitionId] = partitionInfo;
+    if (onlineServers.isEmpty()) {
+      LOGGER.warn("Found segment: {} without any available replica in table: {}, partition: {}", segment,
+          _tableNameWithType, partitionId);
+    }
+  }
+
+  private void updateExistingPartitionInfo(PartitionInfo partitionInfo, String segment, List<String> onlineServers,
+      int partitionId) {
+    if (partitionInfo._fullyReplicatedServers.retainAll(onlineServers)) {
+      LOGGER.warn(
+          "Found segment: {} with online servers: {} that reduces the fully replicated servers to: {} "
+              + "in table: {}, partition: {}", segment, onlineServers, partitionInfo._fullyReplicatedServers,
+          _tableNameWithType, partitionId);
+    }
+    partitionInfo._segments.add(segment);
+  }
+
+  private void handleNewSegmentForNewPartition(PartitionInfo[] partitionInfoMap, String segment,
+      SegmentInfo segmentInfo, int partitionId, List<String> onlineServers, List<String> excludedNewSegments) {
+    if (!onlineServers.isEmpty()) {
+      Set<String> fullyReplicatedServers = new HashSet<>(onlineServers);
+      List<String> segments = new ArrayList<>();
+      segments.add(segment);
+      PartitionInfo partitionInfo = new PartitionInfo(fullyReplicatedServers, segments);
+      partitionInfoMap[partitionId] = partitionInfo;
+    } else {
+      excludedNewSegments.add(segment);
+    }
+  }
+
+  private void handleNewSegmentForExistingPartition(PartitionInfo partitionInfo, String segment,
+      List<String> onlineServers, List<String> excludedNewSegments) {
+    //noinspection SlowListContainsAll
+    if (onlineServers.containsAll(partitionInfo._fullyReplicatedServers)) {
+      partitionInfo._segments.add(segment);
+    } else {
+      excludedNewSegments.add(segment);
+    }
+  }
+
+  private void logExcludedNewSegments(List<String> excludedNewSegments) {
+    if (!excludedNewSegments.isEmpty()) {
+      int numExcludedNewSegments = excludedNewSegments.size();
+      if (numExcludedNewSegments <= 10) {
+        LOGGER.info("Excluded {} new segments: {} without all replicas available in table: {}",
+            numExcludedNewSegments, excludedNewSegments, _tableNameWithType);
+      } else {
+        LOGGER.info("Excluded {} new segments: {}... without all replicas available in table: {}",
+            numExcludedNewSegments, excludedNewSegments.subList(0, 10), _tableNameWithType);
+      }
+    }
+  }
+  //Refactoring end
 
   @Override
   public synchronized void onAssignmentChange(IdealState idealState, ExternalView externalView,

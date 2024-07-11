@@ -114,10 +114,15 @@ public class DictionaryBasedGroupKeyGenerator implements GroupKeyGenerator {
     // only one call will be made to the dictionary to extract each raw value.
     _internedDictionaryValues = _numGroupByExpressions > 1 ? new Object[_numGroupByExpressions][] : null;
 
+    _rawKeyHolder = initRawKeyHolder(projectOperator, numGroupsLimit, arrayBasedThreshold);
+  }
+
+  private RawKeyHolder initRawKeyHolder(BaseProjectOperator<?> projectOperator, int numGroupsLimit,
+      int arrayBasedThreshold) {
     long cardinalityProduct = 1L;
     boolean longOverflow = false;
     for (int i = 0; i < _numGroupByExpressions; i++) {
-      ExpressionContext groupByExpression = groupByExpressions[i];
+      ExpressionContext groupByExpression = _groupByExpressions[i];
       ColumnContext columnContext = projectOperator.getResultColumnContext(groupByExpression);
       _dictionaries[i] = columnContext.getDictionary();
       assert _dictionaries[i] != null;
@@ -135,41 +140,66 @@ public class DictionaryBasedGroupKeyGenerator implements GroupKeyGenerator {
       }
       _isSingleValueColumn[i] = columnContext.isSingleValue();
     }
+    return getRawKeyHolder(longOverflow, cardinalityProduct, numGroupsLimit, arrayBasedThreshold);
+  }
+
+  private RawKeyHolder getRawKeyHolder(boolean longOverflow, long cardinalityProduct, int numGroupsLimit,
+      int arrayBasedThreshold) {
     // TODO: Clear the holder after processing the query instead of before
     if (longOverflow) {
       // ArrayMapBasedHolder
       _globalGroupIdUpperBound = numGroupsLimit;
       Object2IntOpenHashMap<IntArray> groupIdMap = THREAD_LOCAL_INT_ARRAY_MAP.get();
-      int size = groupIdMap.size();
-      groupIdMap.clear();
-      if (size > MAX_CACHING_MAP_SIZE) {
-        groupIdMap.trim();
-      }
-      _rawKeyHolder = new ArrayMapBasedHolder(groupIdMap);
+      clearAndTrimMap(groupIdMap);
+      return new ArrayMapBasedHolder(groupIdMap);
     } else {
-      if (cardinalityProduct > Integer.MAX_VALUE) {
-        // LongMapBasedHolder
-        _globalGroupIdUpperBound = numGroupsLimit;
-        Long2IntOpenHashMap groupIdMap = THREAD_LOCAL_LONG_MAP.get();
-        int size = groupIdMap.size();
-        groupIdMap.clear();
-        if (size > MAX_CACHING_MAP_SIZE) {
-          groupIdMap.trim();
-        }
-        _rawKeyHolder = new LongMapBasedHolder(groupIdMap);
-      } else {
-        _globalGroupIdUpperBound = Math.min((int) cardinalityProduct, numGroupsLimit);
-        if (cardinalityProduct > arrayBasedThreshold) {
-          // IntMapBasedHolder
-          IntGroupIdMap groupIdMap = THREAD_LOCAL_INT_MAP.get();
-          groupIdMap.clearAndTrim();
-          _rawKeyHolder = new IntMapBasedHolder(groupIdMap);
-        } else {
-          _rawKeyHolder = new ArrayBasedHolder();
-        }
-      }
+      return getRawKeyHolderForNonLongOverflow(cardinalityProduct, numGroupsLimit, arrayBasedThreshold);
     }
   }
+
+  private RawKeyHolder getRawKeyHolderForNonLongOverflow(long cardinalityProduct, int numGroupsLimit,
+      int arrayBasedThreshold) {
+    if (cardinalityProduct > Integer.MAX_VALUE) {
+      // LongMapBasedHolder
+      _globalGroupIdUpperBound = numGroupsLimit;
+      Long2IntOpenHashMap groupIdMap = THREAD_LOCAL_LONG_MAP.get();
+      clearAndTrimMap(groupIdMap);
+      return new LongMapBasedHolder(groupIdMap);
+    } else {
+      return getRawKeyHolderForIntegerCardinality(cardinalityProduct, numGroupsLimit, arrayBasedThreshold);
+    }
+  }
+
+  private RawKeyHolder getRawKeyHolderForIntegerCardinality(long cardinalityProduct, int numGroupsLimit,
+      int arrayBasedThreshold) {
+    _globalGroupIdUpperBound = Math.min((int) cardinalityProduct, numGroupsLimit);
+    if (cardinalityProduct > arrayBasedThreshold) {
+      // IntMapBasedHolder
+      IntGroupIdMap groupIdMap = THREAD_LOCAL_INT_MAP.get();
+      groupIdMap.clearAndTrim();
+      return new IntMapBasedHolder(groupIdMap);
+    } else {
+      return new ArrayBasedHolder();
+    }
+  }
+
+  private void clearAndTrimMap(Object2IntOpenHashMap<?> map) {
+    int size = map.size();
+    map.clear();
+    if (size > MAX_CACHING_MAP_SIZE) {
+      map.trim();
+    }
+  }
+
+  private void clearAndTrimMap(Long2IntOpenHashMap map) {
+    int size = map.size();
+    map.clear();
+    if (size > MAX_CACHING_MAP_SIZE) {
+      map.trim();
+    }
+  }
+
+  //Refactoring end
 
   @Override
   public int getGlobalGroupKeyUpperBound() {

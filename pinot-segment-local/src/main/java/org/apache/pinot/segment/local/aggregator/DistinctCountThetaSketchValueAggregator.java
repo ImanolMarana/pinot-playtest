@@ -78,26 +78,32 @@ public class DistinctCountThetaSketchValueAggregator implements ValueAggregator<
       for (String s : (String[]) rawValues) {
         thetaUnion.update(s);
       }
-    } else if (rawValues instanceof Integer[]) {
-      for (Integer i : (Integer[]) rawValues) {
-        thetaUnion.update(i);
-      }
-    } else if (rawValues instanceof Long[]) {
-      for (Long l : (Long[]) rawValues) {
-        thetaUnion.update(l);
-      }
-    } else if (rawValues instanceof Double[]) {
-      for (Double d : (Double[]) rawValues) {
-        thetaUnion.update(d);
-      }
-    } else if (rawValues instanceof Float[]) {
-      for (Float f : (Float[]) rawValues) {
-        thetaUnion.update(f);
+    } else if (rawValues instanceof Number[]) {
+      for (Number number : (Number[]) rawValues) {
+        updateThetaUnionWithNumber(thetaUnion, number);
       }
     } else {
       throw new IllegalStateException(
           "Unsupported data type for Theta Sketch aggregation: " + rawValues.getClass().getSimpleName());
     }
+  }
+
+  private void updateThetaUnionWithNumber(Union thetaUnion, Number number) {
+    if (number instanceof Integer) {
+      thetaUnion.update(number.intValue());
+    } else if (number instanceof Long) {
+      thetaUnion.update(number.longValue());
+    } else if (number instanceof Double) {
+      thetaUnion.update(number.doubleValue());
+    } else if (number instanceof Float) {
+      thetaUnion.update(number.floatValue());
+    } else {
+      throw new IllegalStateException(
+          "Unsupported number type for Theta Sketch aggregation: " + number.getClass().getSimpleName());
+    }
+  }
+
+//Refactoring end
   }
 
   @Override

@@ -383,66 +383,92 @@ public class ModeAggregationFunction
       Map<ExpressionContext, BlockValSet> blockValSetMap) {
     BlockValSet blockValSet = blockValSetMap.get(_expression);
 
-    // For dictionary-encoded expression, store dictionary ids into the dictId map
-    Dictionary dictionary = blockValSet.getDictionary();
-    if (dictionary != null) {
-      int[] dictIds = blockValSet.getDictionaryIdsSV();
-      forEachNotNull(length, blockValSet, (from, to) -> {
-        for (int i = from; i < to; i++) {
-          for (int groupKey : groupKeysArray[i]) {
-            getDictIdCountMap(groupByResultHolder, groupKey, dictionary).merge(dictIds[i], 1, Integer::sum);
-          }
-        }
-      });
+    if (blockValSet.getDictionary() != null) {
+      handleDictionaryEncodedMV(length, groupKeysArray, groupByResultHolder, blockValSet);
       return;
     }
 
-    // For non-dictionary-encoded expression, store values into the value map
     DataType storedType = blockValSet.getValueType().getStoredType();
     switch (storedType) {
       case INT:
-        int[] intValues = blockValSet.getIntValuesSV();
-        forEachNotNull(length, blockValSet, (from, to) -> {
-          for (int i = from; i < to; i++) {
-            for (int groupKey : groupKeysArray[i]) {
-              setValueForGroupKeys(groupByResultHolder, groupKey, intValues[i]);
-            }
-          }
-        });
+        handleIntMV(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case LONG:
-        long[] longValues = blockValSet.getLongValuesSV();
-        forEachNotNull(length, blockValSet, (from, to) -> {
-          for (int i = from; i < to; i++) {
-            for (int groupKey : groupKeysArray[i]) {
-              setValueForGroupKeys(groupByResultHolder, groupKey, longValues[i]);
-            }
-          }
-        });
+        handleLongMV(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case FLOAT:
-        float[] floatValues = blockValSet.getFloatValuesSV();
-        forEachNotNull(length, blockValSet, (from, to) -> {
-          for (int i = from; i < to; i++) {
-            for (int groupKey : groupKeysArray[i]) {
-              setValueForGroupKeys(groupByResultHolder, groupKey, floatValues[i]);
-            }
-          }
-        });
+        handleFloatMV(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case DOUBLE:
-        double[] doubleValues = blockValSet.getDoubleValuesSV();
-        forEachNotNull(length, blockValSet, (from, to) -> {
-          for (int i = from; i < to; i++) {
-            for (int groupKey : groupKeysArray[i]) {
-              setValueForGroupKeys(groupByResultHolder, groupKey, doubleValues[i]);
-            }
-          }
-        });
+        handleDoubleMV(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       default:
         throw new IllegalStateException("Illegal data type for MODE aggregation function: " + storedType);
     }
+  }
+
+  private void handleDictionaryEncodedMV(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    int[] dictIds = blockValSet.getDictionaryIdsSV();
+    Dictionary dictionary = blockValSet.getDictionary();
+    forEachNotNull(length, blockValSet, (from, to) -> {
+      for (int i = from; i < to; i++) {
+        for (int groupKey : groupKeysArray[i]) {
+          getDictIdCountMap(groupByResultHolder, groupKey, dictionary).merge(dictIds[i], 1, Integer::sum);
+        }
+      }
+    });
+  }
+
+  private void handleIntMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
+      BlockValSet blockValSet) {
+    int[] intValues = blockValSet.getIntValuesSV();
+    forEachNotNull(length, blockValSet, (from, to) -> {
+      for (int i = from; i < to; i++) {
+        for (int groupKey : groupKeysArray[i]) {
+          setValueForGroupKeys(groupByResultHolder, groupKey, intValues[i]);
+        }
+      }
+    });
+  }
+
+  private void handleLongMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
+      BlockValSet blockValSet) {
+    long[] longValues = blockValSet.getLongValuesSV();
+    forEachNotNull(length, blockValSet, (from, to) -> {
+      for (int i = from; i < to; i++) {
+        for (int groupKey : groupKeysArray[i]) {
+          setValueForGroupKeys(groupByResultHolder, groupKey, longValues[i]);
+        }
+      }
+    });
+  }
+
+  private void handleFloatMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
+      BlockValSet blockValSet) {
+    float[] floatValues = blockValSet.getFloatValuesSV();
+    forEachNotNull(length, blockValSet, (from, to) -> {
+      for (int i = from; i < to; i++) {
+        for (int groupKey : groupKeysArray[i]) {
+          setValueForGroupKeys(groupByResultHolder, groupKey, floatValues[i]);
+        }
+      }
+    });
+  }
+
+  private void handleDoubleMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
+      BlockValSet blockValSet) {
+    double[] doubleValues = blockValSet.getDoubleValuesSV();
+    forEachNotNull(length, blockValSet, (from, to) -> {
+      for (int i = from; i < to; i++) {
+        for (int groupKey : groupKeysArray[i]) {
+          setValueForGroupKeys(groupByResultHolder, groupKey, doubleValues[i]);
+        }
+      }
+    });
+  }
+
+//Refactoring end
   }
 
   @Override

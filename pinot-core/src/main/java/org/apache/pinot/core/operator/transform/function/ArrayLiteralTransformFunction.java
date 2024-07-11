@@ -462,41 +462,63 @@ public class ArrayLiteralTransformFunction implements TransformFunction {
     String[][] stringArrayResult = _stringArrayResult;
     if (stringArrayResult == null || stringArrayResult.length < numDocs) {
       stringArrayResult = new String[numDocs][];
-      String[] stringArrayLiteral = _stringArrayLiteral;
-      if (stringArrayLiteral == null) {
-        switch (_dataType) {
-          case INT:
-            stringArrayLiteral = new String[_intArrayLiteral.length];
-            for (int i = 0; i < _intArrayLiteral.length; i++) {
-              stringArrayLiteral[i] = Integer.toString(_intArrayLiteral[i]);
-            }
-            break;
-          case LONG:
-            stringArrayLiteral = new String[_longArrayLiteral.length];
-            for (int i = 0; i < _longArrayLiteral.length; i++) {
-              stringArrayLiteral[i] = Long.toString(_longArrayLiteral[i]);
-            }
-            break;
-          case FLOAT:
-            stringArrayLiteral = new String[_floatArrayLiteral.length];
-            for (int i = 0; i < _floatArrayLiteral.length; i++) {
-              stringArrayLiteral[i] = Float.toString(_floatArrayLiteral[i]);
-            }
-            break;
-          case DOUBLE:
-            stringArrayLiteral = new String[_doubleArrayLiteral.length];
-            for (int i = 0; i < _doubleArrayLiteral.length; i++) {
-              stringArrayLiteral[i] = Double.toString(_doubleArrayLiteral[i]);
-            }
-            break;
-          default:
-            throw new IllegalStateException("Unable to convert data type: " + _dataType + " to string array");
-        }
-      }
+      String[] stringArrayLiteral = getOrCreateStringArrayLiteral();
       Arrays.fill(stringArrayResult, stringArrayLiteral);
       _stringArrayResult = stringArrayResult;
     }
     return stringArrayResult;
+  }
+
+  private String[] getOrCreateStringArrayLiteral() {
+    if (_stringArrayLiteral != null) {
+      return _stringArrayLiteral;
+    }
+    switch (_dataType) {
+      case INT:
+        return convertIntArrayToStringArray();
+      case LONG:
+        return convertLongArrayToStringArray();
+      case FLOAT:
+        return convertFloatArrayToStringArray();
+      case DOUBLE:
+        return convertDoubleArrayToStringArray();
+      default:
+        throw new IllegalStateException("Unable to convert data type: " + _dataType + " to string array");
+    }
+  }
+
+  private String[] convertIntArrayToStringArray() {
+    String[] stringArrayLiteral = new String[_intArrayLiteral.length];
+    for (int i = 0; i < _intArrayLiteral.length; i++) {
+      stringArrayLiteral[i] = Integer.toString(_intArrayLiteral[i]);
+    }
+    return stringArrayLiteral;
+  }
+
+  private String[] convertLongArrayToStringArray() {
+    String[] stringArrayLiteral = new String[_longArrayLiteral.length];
+    for (int i = 0; i < _longArrayLiteral.length; i++) {
+      stringArrayLiteral[i] = Long.toString(_longArrayLiteral[i]);
+    }
+    return stringArrayLiteral;
+  }
+
+  private String[] convertFloatArrayToStringArray() {
+    String[] stringArrayLiteral = new String[_floatArrayLiteral.length];
+    for (int i = 0; i < _floatArrayLiteral.length; i++) {
+      stringArrayLiteral[i] = Float.toString(_floatArrayLiteral[i]);
+    }
+    return stringArrayLiteral;
+  }
+
+  private String[] convertDoubleArrayToStringArray() {
+    String[] stringArrayLiteral = new String[_doubleArrayLiteral.length];
+    for (int i = 0; i < _doubleArrayLiteral.length; i++) {
+      stringArrayLiteral[i] = Double.toString(_doubleArrayLiteral[i]);
+    }
+    return stringArrayLiteral;
+  }
+//Refactoring end
   }
 
   @Override

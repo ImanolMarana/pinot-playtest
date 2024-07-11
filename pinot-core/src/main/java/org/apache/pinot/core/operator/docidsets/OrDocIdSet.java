@@ -61,41 +61,80 @@ public final class OrDocIdSet implements BlockDocIdSet {
 
   @Override
   public BlockDocIdIterator iterator() {
-    int numDocIdSets = _docIdSets.size();
-    BlockDocIdIterator[] allDocIdIterators = new BlockDocIdIterator[numDocIdSets];
-    List<SortedDocIdIterator> sortedDocIdIterators = new ArrayList<>();
-    List<BitmapBasedDocIdIterator> bitmapBasedDocIdIterators = new ArrayList<>();
-    List<BlockDocIdIterator> remainingDocIdIterators = new ArrayList<>();
-    long numEntriesScannedForNonScanBasedDocIdSets = 0L;
-    List<BlockDocIdSet> scanBasedDocIdSets = new ArrayList<>();
-
-    for (int i = 0; i < numDocIdSets; i++) {
-      BlockDocIdSet docIdSet = _docIdSets.get(i);
-      BlockDocIdIterator docIdIterator = docIdSet.iterator();
-      allDocIdIterators[i] = docIdIterator;
-      if (docIdIterator instanceof SortedDocIdIterator) {
-        sortedDocIdIterators.add((SortedDocIdIterator) docIdIterator);
-        numEntriesScannedForNonScanBasedDocIdSets += docIdSet.getNumEntriesScannedInFilter();
-      } else if (docIdIterator instanceof BitmapBasedDocIdIterator) {
-        numEntriesScannedForNonScanBasedDocIdSets += docIdSet.getNumEntriesScannedInFilter();
-      } else {
-        remainingDocIdIterators.add(docIdIterator);
-        scanBasedDocIdSets.add(docIdSet);
+        int numDocIdSets = _docIdSets.size();
+        BlockDocIdIterator[] allDocIdIterators = new BlockDocIdIterator[numDocIdSets];
+        List<SortedDocIdIterator> sortedDocIdIterators = new ArrayList<>();
+        List<BitmapBasedDocIdIterator> bitmapBasedDocIdIterators = new ArrayList<>();
+        List<BlockDocIdIterator> remainingDocIdIterators = new ArrayList<>();
+        long numEntriesScannedForNonScanBasedDocIdSets = 0L;
+        List<BlockDocIdSet> scanBasedDocIdSets = new ArrayList<>();
+    
+        for (int i = 0; i < numDocIdSets; i++) {
+          BlockDocIdSet docIdSet = _docIdSets.get(i);
+          BlockDocIdIterator docIdIterator = docIdSet.iterator();
+          allDocIdIterators[i] = docIdIterator;
+    
+          if (docIdIterator instanceof SortedDocIdIterator) {
+            sortedDocIdIterators.add((SortedDocIdIterator) docIdIterator);
+            numEntriesScannedForNonScanBasedDocIdSets += docIdSet.getNumEntriesScannedInFilter();
+          } else if (docIdIterator instanceof BitmapBasedDocIdIterator) {
+            bitmapBasedDocIdIterators.add((BitmapBasedDocIdIterator) docIdIterator);
+            numEntriesScannedForNonScanBasedDocIdSets += docIdSet.getNumEntriesScannedInFilter();
+          } else {
+            remainingDocIdIterators.add(docIdIterator);
+            scanBasedDocIdSets.add(docIdSet);
+          }
+        }
+    
+        // Set _docIdSets to null so that underlying BlockDocIdSets can be garbage collected
+        _docIdSets = null;
+        _numEntriesScannedInFilter = numEntriesScannedForNonScanBasedDocIdSets;
+        _scanBasedDocIdSets.set(scanBasedDocIdSets);
+    
+        return createMergedIterator(sortedDocIdIterators, bitmapBasedDocIdIterators, remainingDocIdIterators);
       }
-    }
+    
+      private BlockDocIdIterator createMergedIterator(List<SortedDocIdIterator> sortedDocIdIterators,
+          List<BitmapBasedDocIdIterator> bitmapBasedDocIdIterators,
+          List<BlockDocIdIterator> remainingDocIdIterators) {
+        int numSortedDocIdIterators = sortedDocIdIterators.size();
+        int numBitmapBasedDocIdIterators = bitmapBasedDocIdIterators.size();
+    
+        if (numSortedDocIdIterators + numBitmapBasedDocIdIterators > 1) {
+          return mergeAndCreateIterator(sortedDocIdIterators, bitmapBasedDocIdIterators, remainingDocIdIterators);
+        } else {
+          return new OrDocIdIterator(remainingDocIdIterators.toArray(new BlockDocIdIterator[0]));
+        }
+      }
+    
+      private BlockDocIdIterator mergeAndCreateIterator(List<SortedDocIdIterator> sortedDocIdIterators,
+          List<BitmapBasedDocIdIterator> bitmapBasedDocIdIterators,
+          List<BlockDocIdIterator> remainingDocIdIterators) {
+        MutableRoaringBitmap docIds = new MutableRoaringBitmap();
+        for (SortedDocIdIterator sortedDocIdIterator : sortedDocIdIterators) {
+          for (Pairs.IntPair docIdRange : sortedDocIdIterator.getDocIdRanges()) {
+            // NOTE: docIdRange has inclusive start and end.
+            docIds.add(docIdRange.getLeft(), docIdRange.getRight() + 1L);
+          }
+        }
+        for (BitmapBasedDocIdIterator bitmapBasedDocIdIterator : bitmapBasedDocIdIterators) {
+          docIds.or(bitmapBasedDocIdIterator.getDocIds());
+        }
+        BitmapDocIdIterator bitmapDocIdIterator = new BitmapDocIdIterator(docIds, _numDocs);
+        int numRemainingDocIdIterators = remainingDocIdIterators.size();
+        if (numRemainingDocIdIterators == 0) {
+          return bitmapDocIdIterator;
+        } else {
+          BlockDocIdIterator[] docIdIterators = new BlockDocIdIterator[numRemainingDocIdIterators + 1];
+          docIdIterators[0] = bitmapDocIdIterator;
+          for (int i = 0; i < numRemainingDocIdIterators; i++) {
+            docIdIterators[i + 1] = remainingDocIdIterators.get(i);
+          }
+          return new OrDocIdIterator(docIdIterators);
+        }
+      }
 
-    // Set _docIdSets to null so that underlying BlockDocIdSets can be garbage collected
-    _docIdSets = null;
-    _numEntriesScannedInFilter = numEntriesScannedForNonScanBasedDocIdSets;
-    _scanBasedDocIdSets.set(scanBasedDocIdSets);
-
-    int numSortedDocIdIterators = sortedDocIdIterators.size();
-    int numBitmapBasedDocIdIterators = bitmapBasedDocIdIterators.size();
-    if (numSortedDocIdIterators + numBitmapBasedDocIdIterators > 1) {
-      // When there are more than one index-base BlockDocIdIterator (SortedDocIdIterator or BitmapBasedDocIdIterator),
-      // merge them and construct a BitmapDocIdIterator from the merged document ids. If there is no remaining
-      // BlockDocIdIterator, directly return the merged BitmapDocIdIterator; otherwise, construct and return an
-      // OrDocIdIterator with the merged BitmapDocIdIterator and the remaining BlockDocIdIterators.
+//Refactoring end
 
       MutableRoaringBitmap docIds = new MutableRoaringBitmap();
       for (SortedDocIdIterator sortedDocIdIterator : sortedDocIdIterators) {

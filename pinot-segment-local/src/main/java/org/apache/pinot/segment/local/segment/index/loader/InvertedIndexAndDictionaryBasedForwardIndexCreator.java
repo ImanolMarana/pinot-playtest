@@ -421,148 +421,9 @@ public class InvertedIndexAndDictionaryBasedForwardIndexCreator implements AutoC
       throws IOException {
     try (ForwardIndexCreator creator = StandardIndexes.forward().createIndexCreator(context, _forwardIndexConfig)) {
       if (_dictionaryEnabled) {
-        if (_singleValue) {
-          for (int docId = 0; docId < _numDocs; docId++) {
-            creator.putDictId(getInt(_forwardIndexValueBuffer, docId));
-          }
-        } else {
-          int startIdx = 0;
-          for (int docId = 0; docId < _numDocs; docId++) {
-            int endIdx = getInt(_forwardIndexLengthBuffer, docId);
-            int[] values = new int[endIdx - startIdx];
-            int valuesIdx = 0;
-            for (int i = startIdx; i < endIdx; i++) {
-              values[valuesIdx++] = getInt(_forwardIndexValueBuffer, i);
-            }
-            creator.putDictIdMV(values);
-            startIdx = endIdx;
-          }
-        }
+        writeDictionaryEncodedForwardIndex(creator);
       } else {
-        switch (creator.getValueType()) {
-          case INT:
-            if (_singleValue) {
-              for (int docId = 0; docId < _numDocs; docId++) {
-                creator.putInt(dictionary.getIntValue(getInt(_forwardIndexValueBuffer, docId)));
-              }
-            } else {
-              int startIdx = 0;
-              for (int docId = 0; docId < _numDocs; docId++) {
-                int endIdx = getInt(_forwardIndexLengthBuffer, docId);
-                int[] values = new int[endIdx - startIdx];
-                int valuesIdx = 0;
-                for (int i = startIdx; i < endIdx; i++) {
-                  values[valuesIdx++] = dictionary.getIntValue(getInt(_forwardIndexValueBuffer, i));
-                }
-                creator.putIntMV(values);
-                startIdx = endIdx;
-              }
-            }
-            break;
-          case LONG:
-            if (_singleValue) {
-              for (int docId = 0; docId < _numDocs; docId++) {
-                creator.putLong(dictionary.getLongValue(getInt(_forwardIndexValueBuffer, docId)));
-              }
-            } else {
-              int startIdx = 0;
-              for (int docId = 0; docId < _numDocs; docId++) {
-                int endIdx = getInt(_forwardIndexLengthBuffer, docId);
-                long[] values = new long[endIdx - startIdx];
-                int valuesIdx = 0;
-                for (int i = startIdx; i < endIdx; i++) {
-                  values[valuesIdx++] = dictionary.getLongValue(getInt(_forwardIndexValueBuffer, i));
-                }
-                creator.putLongMV(values);
-                startIdx = endIdx;
-              }
-            }
-            break;
-          case FLOAT:
-            if (_singleValue) {
-              for (int docId = 0; docId < _numDocs; docId++) {
-                creator.putFloat(dictionary.getFloatValue(getInt(_forwardIndexValueBuffer, docId)));
-              }
-            } else {
-              int startIdx = 0;
-              for (int docId = 0; docId < _numDocs; docId++) {
-                int endIdx = getInt(_forwardIndexLengthBuffer, docId);
-                float[] values = new float[endIdx - startIdx];
-                int valuesIdx = 0;
-                for (int i = startIdx; i < endIdx; i++) {
-                  values[valuesIdx++] = dictionary.getFloatValue(getInt(_forwardIndexValueBuffer, i));
-                }
-                creator.putFloatMV(values);
-                startIdx = endIdx;
-              }
-            }
-            break;
-          case DOUBLE:
-            if (_singleValue) {
-              for (int docId = 0; docId < _numDocs; docId++) {
-                creator.putDouble(dictionary.getDoubleValue(getInt(_forwardIndexValueBuffer, docId)));
-              }
-            } else {
-              int startIdx = 0;
-              for (int docId = 0; docId < _numDocs; docId++) {
-                int endIdx = getInt(_forwardIndexLengthBuffer, docId);
-                double[] values = new double[endIdx - startIdx];
-                int valuesIdx = 0;
-                for (int i = startIdx; i < endIdx; i++) {
-                  values[valuesIdx++] = dictionary.getDoubleValue(getInt(_forwardIndexValueBuffer, i));
-                }
-                creator.putDoubleMV(values);
-                startIdx = endIdx;
-              }
-            }
-            break;
-          case STRING:
-            if (_singleValue) {
-              for (int docId = 0; docId < _numDocs; docId++) {
-                creator.putString(dictionary.getStringValue(getInt(_forwardIndexValueBuffer, docId)));
-              }
-            } else {
-              int startIdx = 0;
-              for (int docId = 0; docId < _numDocs; docId++) {
-                int endIdx = getInt(_forwardIndexLengthBuffer, docId);
-                String[] values = new String[endIdx - startIdx];
-                int valuesIdx = 0;
-                for (int i = startIdx; i < endIdx; i++) {
-                  values[valuesIdx++] = dictionary.getStringValue(getInt(_forwardIndexValueBuffer, i));
-                }
-                creator.putStringMV(values);
-                startIdx = endIdx;
-              }
-            }
-            break;
-          case BYTES:
-            if (_singleValue) {
-              for (int docId = 0; docId < _numDocs; docId++) {
-                creator.putBytes(dictionary.getBytesValue(getInt(_forwardIndexValueBuffer, docId)));
-              }
-            } else {
-              int startIdx = 0;
-              for (int docId = 0; docId < _numDocs; docId++) {
-                int endIdx = getInt(_forwardIndexLengthBuffer, docId);
-                byte[][] values = new byte[endIdx - startIdx][];
-                int valuesIdx = 0;
-                for (int i = startIdx; i < endIdx; i++) {
-                  values[valuesIdx++] = dictionary.getBytesValue(getInt(_forwardIndexValueBuffer, i));
-                }
-                creator.putBytesMV(values);
-                startIdx = endIdx;
-              }
-            }
-            break;
-          case BIG_DECIMAL:
-            Preconditions.checkState(_singleValue, "BIG_DECIMAL type not supported for multi-value columns");
-            for (int docId = 0; docId < _numDocs; docId++) {
-              creator.putBigDecimal(dictionary.getBigDecimalValue(getInt(_forwardIndexValueBuffer, docId)));
-            }
-            break;
-          default:
-            throw new IllegalStateException("Invalid type" + creator.getValueType() + " cannot create forward index");
-        }
+        writeRawValueForwardIndex(dictionary, creator);
       }
     } catch (Exception e) {
       throw new IOException(String.format(
@@ -574,24 +435,163 @@ public class InvertedIndexAndDictionaryBasedForwardIndexCreator implements AutoC
     }
   }
 
-  private static void putInt(PinotDataBuffer buffer, long index, int value) {
-    buffer.putInt(index << 2, value);
-  }
-
-  private static int getInt(PinotDataBuffer buffer, long index) {
-    return buffer.getInt(index << 2);
-  }
-
-  private PinotDataBuffer createTempBuffer(long size, File mmapFile)
+  private void writeDictionaryEncodedForwardIndex(ForwardIndexCreator creator)
       throws IOException {
-    if (_useMMapBuffer) {
-      return PinotDataBuffer.mapFile(mmapFile, false, 0, size, PinotDataBuffer.NATIVE_ORDER,
-          "InvertedIndexAndDictionaryBasedForwardIndexCreator: temp mmapped buffer for " + mmapFile.getName());
+    if (_singleValue) {
+      for (int docId = 0; docId < _numDocs; docId++) {
+        creator.putDictId(getInt(_forwardIndexValueBuffer, docId));
+      }
     } else {
-      return PinotDataBuffer.allocateDirect(size, PinotDataBuffer.NATIVE_ORDER,
-          "InvertedIndexAndDictionaryBasedForwardIndexCreator: temp direct buffer for " + mmapFile.getName());
+      int startIdx = 0;
+      for (int docId = 0; docId < _numDocs; docId++) {
+        int endIdx = getInt(_forwardIndexLengthBuffer, docId);
+        int[] values = new int[endIdx - startIdx];
+        int valuesIdx = 0;
+        for (int i = startIdx; i < endIdx; i++) {
+          values[valuesIdx++] = getInt(_forwardIndexValueBuffer, i);
+        }
+        creator.putDictIdMV(values);
+        startIdx = endIdx;
+      }
     }
   }
+
+  private void writeRawValueForwardIndex(Dictionary dictionary, ForwardIndexCreator creator)
+      throws IOException {
+    switch (creator.getValueType()) {
+      case INT:
+        writeIntForwardIndex(dictionary, creator);
+        break;
+      case LONG:
+        writeLongForwardIndex(dictionary, creator);
+        break;
+      case FLOAT:
+        writeFloatForwardIndex(dictionary, creator);
+        break;
+      case DOUBLE:
+        writeDoubleForwardIndex(dictionary, creator);
+        break;
+      case STRING:
+        writeStringForwardIndex(dictionary, creator);
+        break;
+      case BYTES:
+        writeBytesForwardIndex(dictionary, creator);
+        break;
+      case BIG_DECIMAL:
+        writeBigDecimalForwardIndex(dictionary, creator);
+        break;
+      default:
+        throw new IllegalStateException("Invalid type" + creator.getValueType() + " cannot create forward index");
+    }
+  }
+
+  private void writeIntForwardIndex(Dictionary dictionary, ForwardIndexCreator creator)
+      throws IOException {
+    if (_singleValue) {
+      for (int docId = 0; docId < _numDocs; docId++) {
+        creator.putInt(dictionary.getIntValue(getInt(_forwardIndexValueBuffer, docId)));
+      }
+    } else {
+      writeRawMVForwardIndex(dictionary, creator,
+          (i) -> dictionary.getIntValue(getInt(_forwardIndexValueBuffer, i)), creator::putIntMV);
+    }
+  }
+
+  private void writeLongForwardIndex(Dictionary dictionary, ForwardIndexCreator creator)
+      throws IOException {
+    if (_singleValue) {
+      for (int docId = 0; docId < _numDocs; docId++) {
+        creator.putLong(dictionary.getLongValue(getInt(_forwardIndexValueBuffer, docId)));
+      }
+    } else {
+      writeRawMVForwardIndex(dictionary, creator,
+          (i) -> dictionary.getLongValue(getInt(_forwardIndexValueBuffer, i)), creator::putLongMV);
+    }
+  }
+
+  private void writeFloatForwardIndex(Dictionary dictionary, ForwardIndexCreator creator)
+      throws IOException {
+    if (_singleValue) {
+      for (int docId = 0; docId < _numDocs; docId++) {
+        creator.putFloat(dictionary.getFloatValue(getInt(_forwardIndexValueBuffer, docId)));
+      }
+    } else {
+      writeRawMVForwardIndex(dictionary, creator,
+          (i) -> dictionary.getFloatValue(getInt(_forwardIndexValueBuffer, i)), creator::putFloatMV);
+    }
+  }
+
+  private void writeDoubleForwardIndex(Dictionary dictionary, ForwardIndexCreator creator)
+      throws IOException {
+    if (_singleValue) {
+      for (int docId = 0; docId < _numDocs; docId++) {
+        creator.putDouble(dictionary.getDoubleValue(getInt(_forwardIndexValueBuffer, docId)));
+      }
+    } else {
+      writeRawMVForwardIndex(dictionary, creator,
+          (i) -> dictionary.getDoubleValue(getInt(_forwardIndexValueBuffer, i)), creator::putDoubleMV);
+    }
+  }
+
+  private void writeStringForwardIndex(Dictionary dictionary, ForwardIndexCreator creator)
+      throws IOException {
+    if (_singleValue) {
+      for (int docId = 0; docId < _numDocs; docId++) {
+        creator.putString(dictionary.getStringValue(getInt(_forwardIndexValueBuffer, docId)));
+      }
+    } else {
+      writeRawMVForwardIndex(dictionary, creator,
+          (i) -> dictionary.getStringValue(getInt(_forwardIndexValueBuffer, i)), creator::putStringMV);
+    }
+  }
+
+  private void writeBytesForwardIndex(Dictionary dictionary, ForwardIndexCreator creator)
+      throws IOException {
+    if (_singleValue) {
+      for (int docId = 0; docId < _numDocs; docId++) {
+        creator.putBytes(dictionary.getBytesValue(getInt(_forwardIndexValueBuffer, docId)));
+      }
+    } else {
+      writeRawMVForwardIndex(dictionary, creator,
+          (i) -> dictionary.getBytesValue(getInt(_forwardIndexValueBuffer, i)), creator::putBytesMV);
+    }
+  }
+
+  private void writeBigDecimalForwardIndex(Dictionary dictionary, ForwardIndexCreator creator)
+      throws IOException {
+    Preconditions.checkState(_singleValue, "BIG_DECIMAL type not supported for multi-value columns");
+    for (int docId = 0; docId < _numDocs; docId++) {
+      creator.putBigDecimal(dictionary.getBigDecimalValue(getInt(_forwardIndexValueBuffer, docId)));
+    }
+  }
+
+  private <T> void writeRawMVForwardIndex(Dictionary dictionary, ForwardIndexCreator creator,
+      ValueExtractor<T> extractor, ValueSetter<T> setter)
+      throws IOException {
+    int startIdx = 0;
+    for (int docId = 0; docId < _numDocs; docId++) {
+      int endIdx = getInt(_forwardIndexLengthBuffer, docId);
+      T[] values = (T[]) new Object[endIdx - startIdx];
+      int valuesIdx = 0;
+      for (int i = startIdx; i < endIdx; i++) {
+        values[valuesIdx++] = extractor.extract(i);
+      }
+      setter.set(values);
+      startIdx = endIdx;
+    }
+  }
+
+  @FunctionalInterface
+  private interface ValueExtractor<T> {
+    T extract(int index);
+  }
+
+  @FunctionalInterface
+  private interface ValueSetter<T> {
+    void set(T[] values) throws IOException;
+  }
+
+//Refactoring end
 
   private void destroyBuffer(PinotDataBuffer buffer, File mmapFile)
       throws IOException {

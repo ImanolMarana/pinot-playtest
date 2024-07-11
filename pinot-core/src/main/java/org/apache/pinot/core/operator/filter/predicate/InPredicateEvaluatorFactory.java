@@ -73,38 +73,14 @@ public class InPredicateEvaluatorFactory {
    */
   public static InRawPredicateEvaluator newRawValueBasedEvaluator(InPredicate inPredicate, DataType dataType) {
     switch (dataType) {
-      case INT: {
-        int[] intValues = inPredicate.getIntValues();
-        IntSet matchingValues = new IntOpenHashSet(HashUtil.getMinHashSetSize(intValues.length));
-        for (int value : intValues) {
-          matchingValues.add(value);
-        }
-        return new IntRawValueBasedInPredicateEvaluator(inPredicate, matchingValues);
-      }
-      case LONG: {
-        long[] longValues = inPredicate.getLongValues();
-        LongSet matchingValues = new LongOpenHashSet(HashUtil.getMinHashSetSize(longValues.length));
-        for (long value : longValues) {
-          matchingValues.add(value);
-        }
-        return new LongRawValueBasedInPredicateEvaluator(inPredicate, matchingValues);
-      }
-      case FLOAT: {
-        float[] floatValues = inPredicate.getFloatValues();
-        FloatSet matchingValues = new FloatOpenHashSet(HashUtil.getMinHashSetSize(floatValues.length));
-        for (float value : floatValues) {
-          matchingValues.add(value);
-        }
-        return new FloatRawValueBasedInPredicateEvaluator(inPredicate, matchingValues);
-      }
-      case DOUBLE: {
-        double[] doubleValues = inPredicate.getDoubleValues();
-        DoubleSet matchingValues = new DoubleOpenHashSet(HashUtil.getMinHashSetSize(doubleValues.length));
-        for (double value : doubleValues) {
-          matchingValues.add(value);
-        }
-        return new DoubleRawValueBasedInPredicateEvaluator(inPredicate, matchingValues);
-      }
+      case INT:
+        return new IntRawValueBasedInPredicateEvaluator(inPredicate, getMatchingIntValues(inPredicate));
+      case LONG:
+        return new LongRawValueBasedInPredicateEvaluator(inPredicate, getMatchingLongValues(inPredicate));
+      case FLOAT:
+        return new FloatRawValueBasedInPredicateEvaluator(inPredicate, getMatchingFloatValues(inPredicate));
+      case DOUBLE:
+        return new DoubleRawValueBasedInPredicateEvaluator(inPredicate, getMatchingDoubleValues(inPredicate));
       case BIG_DECIMAL: {
         BigDecimal[] bigDecimalValues = inPredicate.getBigDecimalValues();
         // NOTE: Use TreeSet because BigDecimal's compareTo() is not consistent with equals()
@@ -112,26 +88,72 @@ public class InPredicateEvaluatorFactory {
         TreeSet<BigDecimal> matchingValues = new TreeSet<>(Arrays.asList(bigDecimalValues));
         return new BigDecimalRawValueBasedInPredicateEvaluator(inPredicate, matchingValues);
       }
-      case BOOLEAN: {
-        int[] booleanValues = inPredicate.getBooleanValues();
-        IntSet matchingValues = new IntOpenHashSet(HashUtil.getMinHashSetSize(booleanValues.length));
-        for (int value : booleanValues) {
-          matchingValues.add(value);
-        }
-        return new IntRawValueBasedInPredicateEvaluator(inPredicate, matchingValues);
-      }
-      case TIMESTAMP: {
-        long[] timestampValues = inPredicate.getTimestampValues();
-        LongSet matchingValues = new LongOpenHashSet(HashUtil.getMinHashSetSize(timestampValues.length));
-        for (long value : timestampValues) {
-          matchingValues.add(value);
-        }
-        return new LongRawValueBasedInPredicateEvaluator(inPredicate, matchingValues);
-      }
+      case BOOLEAN:
+        return new IntRawValueBasedInPredicateEvaluator(inPredicate, getMatchingIntValues(inPredicate));
+      case TIMESTAMP:
+        return new LongRawValueBasedInPredicateEvaluator(inPredicate, getMatchingLongValues(inPredicate));
       case STRING: {
         List<String> stringValues = inPredicate.getValues();
         Set<String> matchingValues = new ObjectOpenHashSet<>(HashUtil.getMinHashSetSize(stringValues.size()));
         // NOTE: Add value-by-value to avoid overhead
+        for (String value : stringValues) {
+          //noinspection UseBulkOperation
+          matchingValues.add(value);
+        }
+        return new StringRawValueBasedInPredicateEvaluator(inPredicate, matchingValues);
+      }
+      case BYTES: {
+        ByteArray[] bytesValues = inPredicate.getBytesValues();
+        Set<ByteArray> matchingValues = new ObjectOpenHashSet<>(HashUtil.getMinHashSetSize(bytesValues.length));
+        // NOTE: Add value-by-value to avoid overhead
+        //noinspection ManualArrayToCollectionCopy
+        for (ByteArray value : bytesValues) {
+          //noinspection UseBulkOperation
+          matchingValues.add(value);
+        }
+        return new BytesRawValueBasedInPredicateEvaluator(inPredicate, matchingValues);
+      }
+      default:
+        throw new IllegalStateException("Unsupported data type: " + dataType);
+    }
+  }
+
+  private static IntSet getMatchingIntValues(InPredicate inPredicate) {
+    int[] intValues = inPredicate.getIntValues();
+    IntSet matchingValues = new IntOpenHashSet(HashUtil.getMinHashSetSize(intValues.length));
+    for (int value : intValues) {
+      matchingValues.add(value);
+    }
+    return matchingValues;
+  }
+
+  private static LongSet getMatchingLongValues(InPredicate inPredicate) {
+    long[] longValues = inPredicate.getLongValues();
+    LongSet matchingValues = new LongOpenHashSet(HashUtil.getMinHashSetSize(longValues.length));
+    for (long value : longValues) {
+      matchingValues.add(value);
+    }
+    return matchingValues;
+  }
+
+  private static FloatSet getMatchingFloatValues(InPredicate inPredicate) {
+    float[] floatValues = inPredicate.getFloatValues();
+    FloatSet matchingValues = new FloatOpenHashSet(HashUtil.getMinHashSetSize(floatValues.length));
+    for (float value : floatValues) {
+      matchingValues.add(value);
+    }
+    return matchingValues;
+  }
+
+  private static DoubleSet getMatchingDoubleValues(InPredicate inPredicate) {
+    double[] doubleValues = inPredicate.getDoubleValues();
+    DoubleSet matchingValues = new DoubleOpenHashSet(HashUtil.getMinHashSetSize(doubleValues.length));
+    for (double value : doubleValues) {
+      matchingValues.add(value);
+    }
+    return matchingValues;
+  }
+//Refactoring end
         for (String value : stringValues) {
           //noinspection UseBulkOperation
           matchingValues.add(value);

@@ -85,121 +85,98 @@ public class PredicateComparisonRewriter implements QueryRewriter {
       // If the function is not of FilterKind, we have to rewrite the function.
       // Example: A query like "select col1 from table where startsWith(col1, 'myStr') AND col2 > 10;" should be
       //          rewritten to "select col1 from table where startsWith(col1, 'myStr') = true AND col2 > 10;".
-      expression = convertPredicateToEqualsBooleanExpression(expression);
-      return expression;
+      return convertPredicateToEqualsBooleanExpression(expression);
     } else {
-      FilterKind filterKind = FilterKind.valueOf(function.getOperator());
-      List<Expression> operands = function.getOperands();
-      switch (filterKind) {
-        case AND:
-        case OR:
-        case NOT:
-          operands.replaceAll(PredicateComparisonRewriter::updatePredicate);
-          break;
-        case EQUALS:
-        case NOT_EQUALS:
-        case GREATER_THAN:
-        case GREATER_THAN_OR_EQUAL:
-        case LESS_THAN:
-        case LESS_THAN_OR_EQUAL:
-          Expression firstOperand = operands.get(0);
-          Expression secondOperand = operands.get(1);
-
-          // Handle predicate like '10 = a' -> 'a = 10'
-          if (firstOperand.isSetLiteral()) {
-            if (!secondOperand.isSetLiteral()) {
-              function.setOperator(getOppositeOperator(filterKind).name());
-              operands.set(0, secondOperand);
-              operands.set(1, firstOperand);
-            }
-            break;
-          }
-
-          // Handle predicate like 'a > b' -> 'a - b > 0'
-          if (!secondOperand.isSetLiteral()) {
-            Expression minusExpression = RequestUtils.getFunctionExpression("minus", firstOperand, secondOperand);
-            operands.set(0, minusExpression);
-            operands.set(1, RequestUtils.getLiteralExpression(0));
-            break;
-          }
-          break;
-        case VECTOR_SIMILARITY: {
-          Preconditions.checkArgument(operands.size() >= 2 && operands.size() <= 3,
-              "For %s predicate, the number of operands must be at either 2 or 3, got: %s", filterKind, expression);
-          /*
-           * Array Literal could be either:
-           * 1. a function of type 'ARRAYVALUECONSTRUCTOR' with operands of float/double
-           * 2. a float/double array literals
-           * Also check in {@link org.apache.pinot.sql.parsers.CalciteSqlParser#validateFilter(Expression)}}
-           */
-          if ((operands.get(1).getFunctionCall() != null && !operands.get(1).getFunctionCall().getOperator()
-              .equalsIgnoreCase("arrayvalueconstructor"))
-              || (operands.get(1).getLiteral() != null && !operands.get(1).getLiteral().isSetFloatArrayValue()
-                  && !operands.get(1).getLiteral().isSetDoubleArrayValue())) {
-            throw new SqlCompilationException(
-                String.format("For %s predicate, the second operand must be a float/double array literal, got: %s",
-                    filterKind,
-                    expression));
-          }
-          if (operands.size() == 3 && operands.get(2).getLiteral() == null) {
-            throw new SqlCompilationException(
-                String.format("For %s predicate, the third operand must be a literal, got: %s", filterKind,
-                    expression));
-          }
-          break;
-        }
-        default:
-          int numOperands = operands.size();
-          for (int i = 1; i < numOperands; i++) {
-            if (!operands.get(i).isSetLiteral()) {
-              throw new SqlCompilationException(
-                  String.format("For %s predicate, the operands except for the first one must be literal, got: %s",
-                      filterKind, expression));
-            }
-          }
-          break;
-      }
+      return updateFilterKindFunctionExpression(expression);
     }
-
+  }
+  
+  private static Expression updateFilterKindFunctionExpression(Expression expression){
+    Function function = expression.getFunctionCall();
+    FilterKind filterKind = FilterKind.valueOf(function.getOperator());
+    List<Expression> operands = function.getOperands();
+    
+    switch (filterKind) {
+      case AND:
+      case OR:
+      case NOT:
+        operands.replaceAll(PredicateComparisonRewriter::updatePredicate);
+        break;
+      case EQUALS:
+      case NOT_EQUALS:
+      case GREATER_THAN:
+      case GREATER_THAN_OR_EQUAL:
+      case LESS_THAN:
+      case LESS_THAN_OR_EQUAL:
+        updateComparisonFunctionOperands(function, operands);
+        break;
+      case VECTOR_SIMILARITY: 
+        validateVectorSimilarityFunction(operands, expression);
+        break;
+      default:
+        validateDefaultFunctionOperands(operands, filterKind, expression);
+        break;
+    }
     return expression;
   }
 
-  /**
-   * Rewrite predicates to boolean expressions with EQUALS operator
-   *     Example1: "select * from table where col1" converts to
-   *               "select * from table where col1 = true"
-   *     Example2: "select * from table where startsWith(col1, 'str')" converts to
-   *               "select * from table where startsWith(col1, 'str') = true"
-   *
-   * @param expression Expression
-   * @return Rewritten expression
-   */
-  private static Expression convertPredicateToEqualsBooleanExpression(Expression expression) {
-    return RequestUtils.getFunctionExpression(FilterKind.EQUALS.name(), expression,
-        RequestUtils.getLiteralExpression(true));
-  }
-
-  /**
-   * The purpose of this method is to convert expression "0 < columnA" to "columnA > 0".
-   * The conversion would be:
-   *  from ">" to "<",
-   *  from "<" to ">",
-   *  from ">=" to "<=",
-   *  from "<=" to ">=".
-   */
-  private static FilterKind getOppositeOperator(FilterKind filterKind) {
-    switch (filterKind) {
-      case GREATER_THAN:
-        return FilterKind.LESS_THAN;
-      case GREATER_THAN_OR_EQUAL:
-        return FilterKind.LESS_THAN_OR_EQUAL;
-      case LESS_THAN:
-        return FilterKind.GREATER_THAN;
-      case LESS_THAN_OR_EQUAL:
-        return FilterKind.GREATER_THAN_OR_EQUAL;
-      default:
-        // Do nothing
-        return filterKind;
+  private static void validateVectorSimilarityFunction(List<Expression> operands, Expression expression) {
+    Preconditions.checkArgument(operands.size() >= 2 && operands.size() <= 3,
+        "For %s predicate, the number of operands must be at either 2 or 3, got: %s", FilterKind.VECTOR_SIMILARITY,
+        expression);
+    /*
+     * Array Literal could be either:
+     * 1. a function of type 'ARRAYVALUECONSTRUCTOR' with operands of float/double
+     * 2. a float/double array literals
+     * Also check in {@link org.apache.pinot.sql.parsers.CalciteSqlParser#validateFilter(Expression)}}
+     */
+    if ((operands.get(1).getFunctionCall() != null
+        && !operands.get(1).getFunctionCall().getOperator().equalsIgnoreCase("arrayvalueconstructor"))
+        || (operands.get(1).getLiteral() != null && !operands.get(1).getLiteral().isSetFloatArrayValue()
+            && !operands.get(1).getLiteral().isSetDoubleArrayValue())) {
+      throw new SqlCompilationException(
+          String.format("For %s predicate, the second operand must be a float/double array literal, got: %s",
+              FilterKind.VECTOR_SIMILARITY, expression));
+    }
+    if (operands.size() == 3 && operands.get(2).getLiteral() == null) {
+      throw new SqlCompilationException(
+          String.format("For %s predicate, the third operand must be a literal, got: %s",
+              FilterKind.VECTOR_SIMILARITY, expression));
     }
   }
-}
+
+  private static void validateDefaultFunctionOperands(List<Expression> operands, FilterKind filterKind,
+      Expression expression) {
+    int numOperands = operands.size();
+    for (int i = 1; i < numOperands; i++) {
+      if (!operands.get(i).isSetLiteral()) {
+        throw new SqlCompilationException(
+            String.format("For %s predicate, the operands except for the first one must be literal, got: %s",
+                filterKind, expression));
+      }
+    }
+  }
+
+  private static void updateComparisonFunctionOperands(Function function, List<Expression> operands) {
+    Expression firstOperand = operands.get(0);
+    Expression secondOperand = operands.get(1);
+
+    // Handle predicate like '10 = a' -> 'a = 10'
+    if (firstOperand.isSetLiteral()) {
+      if (!secondOperand.isSetLiteral()) {
+        FilterKind filterKind = FilterKind.valueOf(function.getOperator());
+        function.setOperator(getOppositeOperator(filterKind).name());
+        operands.set(0, secondOperand);
+        operands.set(1, firstOperand);
+      }
+    }
+
+    // Handle predicate like 'a > b' -> 'a - b > 0'
+    if (!secondOperand.isSetLiteral()) {
+      Expression minusExpression = RequestUtils.getFunctionExpression("minus", firstOperand, secondOperand);
+      operands.set(0, minusExpression);
+      operands.set(1, RequestUtils.getLiteralExpression(0));
+    }
+  }
+
+//Refactoring end

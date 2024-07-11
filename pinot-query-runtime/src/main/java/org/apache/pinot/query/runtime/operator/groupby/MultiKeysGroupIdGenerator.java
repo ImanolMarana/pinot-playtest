@@ -49,27 +49,37 @@ public class MultiKeysGroupIdGenerator implements GroupIdGenerator {
     int[] keyIds = new int[numKeyColumns];
     int numGroups = _groupIdMap.size();
     if (numGroups < _numGroupsLimit) {
-      for (int i = 0; i < numKeyColumns; i++) {
-        Object keyValue = keyValues[i];
-        keyIds[i] = keyValue != null ? _keyToIdMaps[i].put(keyValue) : NULL_ID;
-      }
-      return _groupIdMap.computeIntIfAbsent(new FixedIntArray(keyIds), k -> numGroups);
+      return getGroupIdBelowLimit(keyValues, numKeyColumns, keyIds, numGroups);
     } else {
-      for (int i = 0; i < numKeyColumns; i++) {
-        Object keyValue = keyValues[i];
-        if (keyValue == null) {
-          keyIds[i] = NULL_ID;
-        } else {
-          int keyId = _keyToIdMaps[i].getId(keyValue);
-          if (keyId == INVALID_ID) {
-            return INVALID_ID;
-          }
-          keyIds[i] = keyId;
-        }
-      }
-      return _groupIdMap.getInt(new FixedIntArray(keyIds));
+      return getGroupIdAtLimit(keyValues, numKeyColumns, keyIds);
     }
   }
+  
+  private int getGroupIdBelowLimit(Object[] keyValues, int numKeyColumns, int[] keyIds, int numGroups) {
+    for (int i = 0; i < numKeyColumns; i++) {
+      Object keyValue = keyValues[i];
+      keyIds[i] = keyValue != null ? _keyToIdMaps[i].put(keyValue) : NULL_ID;
+    }
+    return _groupIdMap.computeIntIfAbsent(new FixedIntArray(keyIds), k -> numGroups);
+  }
+  
+  private int getGroupIdAtLimit(Object[] keyValues, int numKeyColumns, int[] keyIds) {
+    for (int i = 0; i < numKeyColumns; i++) {
+      Object keyValue = keyValues[i];
+      if (keyValue == null) {
+        keyIds[i] = NULL_ID;
+      } else {
+        int keyId = _keyToIdMaps[i].getId(keyValue);
+        if (keyId == INVALID_ID) {
+          return INVALID_ID;
+        }
+        keyIds[i] = keyId;
+      }
+    }
+    return _groupIdMap.getInt(new FixedIntArray(keyIds));
+  }
+
+//Refactoring end
 
   @Override
   public int getNumGroups() {

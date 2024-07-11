@@ -539,15 +539,28 @@ public class ClpRewriter implements QueryRewriter {
    * @return The regular expression which matches the same values as the wildcard query.
    */
   private static String wildcardQueryToRegex(String wildcardQuery) {
-    boolean isEscaped = false;
     StringBuilder queryWithSqlWildcards = new StringBuilder();
 
     // Add begin anchor if necessary
-    if (!wildcardQuery.isEmpty() && '*' != wildcardQuery.charAt(0)) {
+    if (!wildcardQuery.isEmpty() && wildcardQuery.charAt(0) != '*') {
       queryWithSqlWildcards.append('^');
     }
 
+    queryWithSqlWildcards.append(convertWildcardsToRegex(wildcardQuery));
+
+    // Add end anchor if necessary
+    if (!wildcardQuery.isEmpty() && wildcardQuery.charAt(wildcardQuery.length() - 1) != '*') {
+      queryWithSqlWildcards.append('$');
+    }
+
+    return queryWithSqlWildcards.toString();
+  }
+  
+  private static String convertWildcardsToRegex(String wildcardQuery){
+    StringBuilder result = new StringBuilder();
+    boolean isEscaped = false;
     int uncopiedIdx = 0;
+
     for (int queryIdx = 0; queryIdx < wildcardQuery.length(); queryIdx++) {
       char queryChar = wildcardQuery.charAt(queryIdx);
       if (isEscaped) {
@@ -556,32 +569,35 @@ public class ClpRewriter implements QueryRewriter {
         if ('\\' == queryChar) {
           isEscaped = true;
         } else if (isWildcard(queryChar)) {
-          queryWithSqlWildcards.append(wildcardQuery, uncopiedIdx, queryIdx);
-          queryWithSqlWildcards.append('.');
+          result.append(wildcardQuery, uncopiedIdx, queryIdx);
+          result.append('.');
           uncopiedIdx = queryIdx;
         } else {
-          for (final char metaChar : _NON_WILDCARD_REGEX_META_CHARACTERS) {
-            if (metaChar == queryChar) {
-              queryWithSqlWildcards.append(wildcardQuery, uncopiedIdx, queryIdx);
-              queryWithSqlWildcards.append('\\');
-              uncopiedIdx = queryIdx;
-              break;
-            }
-          }
+          uncopiedIdx = handleMetaCharacters(queryChar, wildcardQuery, result, uncopiedIdx);
         }
       }
     }
     if (uncopiedIdx < wildcardQuery.length()) {
-      queryWithSqlWildcards.append(wildcardQuery, uncopiedIdx, wildcardQuery.length());
+      result.append(wildcardQuery, uncopiedIdx, wildcardQuery.length());
     }
-
-    // Add end anchor if necessary
-    if (!wildcardQuery.isEmpty() && '*' != wildcardQuery.charAt(wildcardQuery.length() - 1)) {
-      queryWithSqlWildcards.append('$');
-    }
-
-    return queryWithSqlWildcards.toString();
+    return result.toString();
   }
+
+  private static int handleMetaCharacters(char queryChar, String wildcardQuery, StringBuilder result, int uncopiedIdx) {
+    for (final char metaChar : _NON_WILDCARD_REGEX_META_CHARACTERS) {
+      if (metaChar == queryChar) {
+        result.append(wildcardQuery, uncopiedIdx, result.length());
+        result.append('\\');
+        return result.length();
+      }
+    }
+    return uncopiedIdx;
+  }
+  
+  private static boolean isWildcard(char c) {
+    return '*' == c || '?' == c;
+  }
+//Refactoring end
 
   /**
    * @param c

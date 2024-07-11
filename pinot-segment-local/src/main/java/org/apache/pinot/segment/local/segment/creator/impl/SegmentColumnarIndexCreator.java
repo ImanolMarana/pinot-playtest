@@ -130,90 +130,7 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
     _creatorsByColAndIndex = Maps.newHashMapWithExpectedSize(indexConfigs.keySet().size());
 
     for (String columnName : indexConfigs.keySet()) {
-      FieldSpec fieldSpec = schema.getFieldSpecFor(columnName);
-      Preconditions.checkState(fieldSpec != null, "Failed to find column: %s in the schema", columnName);
-      if (fieldSpec.isVirtualColumn()) {
-        LOGGER.warn("Ignoring index creation for virtual column {}", columnName);
-        continue;
-      }
-
-      FieldIndexConfigs originalConfig = indexConfigs.get(columnName);
-      ColumnIndexCreationInfo columnIndexCreationInfo = indexCreationInfoMap.get(columnName);
-      Preconditions.checkNotNull(columnIndexCreationInfo, "Missing index creation info for column: %s", columnName);
-      boolean dictEnabledColumn = createDictionaryForColumn(columnIndexCreationInfo, segmentCreationSpec, fieldSpec);
-      if (originalConfig.getConfig(StandardIndexes.inverted()).isEnabled()) {
-        Preconditions.checkState(dictEnabledColumn,
-            "Cannot create inverted index for raw index column: %s", columnName);
-      }
-
-      IndexType<ForwardIndexConfig, ?, ForwardIndexCreator> forwardIdx = StandardIndexes.forward();
-      boolean forwardIndexDisabled = !originalConfig.getConfig(forwardIdx).isEnabled();
-
-      //@formatter:off
-      IndexCreationContext.Common context = IndexCreationContext.builder()
-          .withIndexDir(_indexDir)
-          .withDictionary(dictEnabledColumn)
-          .withFieldSpec(fieldSpec)
-          .withTotalDocs(segmentIndexCreationInfo.getTotalDocs())
-          .withColumnIndexCreationInfo(columnIndexCreationInfo)
-          .withOptimizedDictionary(_config.isOptimizeDictionary()
-              || _config.isOptimizeDictionaryForMetrics() && fieldSpec.getFieldType() == FieldSpec.FieldType.METRIC)
-          .onHeap(segmentCreationSpec.isOnHeap())
-          .withForwardIndexDisabled(forwardIndexDisabled)
-          .withTextCommitOnClose(true)
-          .withImmutableToMutableIdMap(immutableToMutableIdMap)
-          .withRealtimeConversion(segmentCreationSpec.isRealtimeConversion())
-          .withConsumerDir(segmentCreationSpec.getConsumerDir())
-          .build();
-      //@formatter:on
-
-      FieldIndexConfigs config = adaptConfig(columnName, originalConfig, columnIndexCreationInfo, segmentCreationSpec);
-
-      if (dictEnabledColumn) {
-        // Create dictionary-encoded index
-        // Initialize dictionary creator
-        // TODO: Dictionary creator holds all unique values on heap. Consider keeping dictionary instead of creator
-        //       which uses off-heap memory.
-
-        DictionaryIndexConfig dictConfig = config.getConfig(StandardIndexes.dictionary());
-        if (!dictConfig.isEnabled()) {
-          LOGGER.info("Creating dictionary index in column {}.{} even when it is disabled in config",
-              segmentCreationSpec.getTableName(), columnName);
-        }
-        SegmentDictionaryCreator creator =
-            new DictionaryIndexPlugin().getIndexType().createIndexCreator(context, dictConfig);
-
-        try {
-          creator.build(context.getSortedUniqueElementsArray());
-        } catch (Exception e) {
-          LOGGER.error("Error building dictionary for field: {}, cardinality: {}, number of bytes per entry: {}",
-              context.getFieldSpec().getName(), context.getCardinality(), creator.getNumBytesPerEntry());
-          throw e;
-        }
-
-        _dictionaryCreatorMap.put(columnName, creator);
-      }
-
-      Map<IndexType<?, ?, ?>, IndexCreator> creatorsByIndex =
-          Maps.newHashMapWithExpectedSize(IndexService.getInstance().getAllIndexes().size());
-      for (IndexType<?, ?, ?> index : IndexService.getInstance().getAllIndexes()) {
-        if (index.getIndexBuildLifecycle() != IndexType.BuildLifecycle.DURING_SEGMENT_CREATION) {
-          continue;
-        }
-        tryCreateIndexCreator(creatorsByIndex, index, context, config);
-      }
-      // TODO: Remove this when values stored as ForwardIndex stop depending on TextIndex config
-      IndexCreator oldFwdCreator = creatorsByIndex.get(forwardIdx);
-      if (oldFwdCreator != null) {
-        Object fakeForwardValue = calculateRawValueForTextIndex(dictEnabledColumn, config, fieldSpec);
-        if (fakeForwardValue != null) {
-          ForwardIndexCreator castedOldFwdCreator = (ForwardIndexCreator) oldFwdCreator;
-          SameValueForwardIndexCreator fakeValueFwdCreator =
-              new SameValueForwardIndexCreator(fakeForwardValue, castedOldFwdCreator);
-          creatorsByIndex.put(forwardIdx, fakeValueFwdCreator);
-        }
-      }
-      _creatorsByColAndIndex.put(columnName, creatorsByIndex);
+      initColumn(columnName, segmentCreationSpec, indexCreationInfoMap, schema, immutableToMutableIdMap);
     }
 
     // Although NullValueVector is implemented as an index, it needs to be treated in a different way than other indexes
@@ -225,6 +142,110 @@ public class SegmentColumnarIndexCreator implements SegmentCreator {
       }
     }
   }
+
+  private void initColumn(String columnName, SegmentGeneratorConfig segmentCreationSpec,
+      TreeMap<String, ColumnIndexCreationInfo> indexCreationInfoMap, Schema schema,
+      @Nullable int[] immutableToMutableIdMap)
+      throws Exception {
+    FieldSpec fieldSpec = schema.getFieldSpecFor(columnName);
+    Preconditions.checkState(fieldSpec != null, "Failed to find column: %s in the schema", columnName);
+    if (fieldSpec.isVirtualColumn()) {
+      LOGGER.warn("Ignoring index creation for virtual column {}", columnName);
+      return;
+    }
+
+    FieldIndexConfigs originalConfig = segmentCreationSpec.getIndexConfigsByColName().get(columnName);
+    ColumnIndexCreationInfo columnIndexCreationInfo = indexCreationInfoMap.get(columnName);
+    Preconditions.checkNotNull(columnIndexCreationInfo, "Missing index creation info for column: %s", columnName);
+    boolean dictEnabledColumn = createDictionaryForColumn(columnIndexCreationInfo, segmentCreationSpec, fieldSpec);
+    if (originalConfig.getConfig(StandardIndexes.inverted()).isEnabled()) {
+      Preconditions.checkState(dictEnabledColumn,
+          "Cannot create inverted index for raw index column: %s", columnName);
+    }
+
+    IndexType<ForwardIndexConfig, ?, ForwardIndexCreator> forwardIdx = StandardIndexes.forward();
+    boolean forwardIndexDisabled = !originalConfig.getConfig(forwardIdx).isEnabled();
+
+    //@formatter:off
+    IndexCreationContext.Common context = IndexCreationContext.builder()
+        .withIndexDir(_indexDir)
+        .withDictionary(dictEnabledColumn)
+        .withFieldSpec(fieldSpec)
+        .withTotalDocs(_totalDocs)
+        .withColumnIndexCreationInfo(columnIndexCreationInfo)
+        .withOptimizedDictionary(_config.isOptimizeDictionary()
+            || _config.isOptimizeDictionaryForMetrics() && fieldSpec.getFieldType() == FieldSpec.FieldType.METRIC)
+        .onHeap(segmentCreationSpec.isOnHeap())
+        .withForwardIndexDisabled(forwardIndexDisabled)
+        .withTextCommitOnClose(true)
+        .withImmutableToMutableIdMap(immutableToMutableIdMap)
+        .withRealtimeConversion(segmentCreationSpec.isRealtimeConversion())
+        .withConsumerDir(segmentCreationSpec.getConsumerDir())
+        .build();
+    //@formatter:on
+
+    FieldIndexConfigs config = adaptConfig(columnName, originalConfig, columnIndexCreationInfo, segmentCreationSpec);
+
+    if (dictEnabledColumn) {
+      createDictionaryForColumn(context, config, columnName);
+    }
+
+    createIndexCreatorsForColumn(context, config, columnName, forwardIdx);
+  }
+
+  private void createIndexCreatorsForColumn(IndexCreationContext.Common context, FieldIndexConfigs config,
+      String columnName, IndexType<ForwardIndexConfig, ?, ForwardIndexCreator> forwardIdx)
+      throws Exception {
+    Map<IndexType<?, ?, ?>, IndexCreator> creatorsByIndex =
+        Maps.newHashMapWithExpectedSize(IndexService.getInstance().getAllIndexes().size());
+    for (IndexType<?, ?, ?> index : IndexService.getInstance().getAllIndexes()) {
+      if (index.getIndexBuildLifecycle() != IndexType.BuildLifecycle.DURING_SEGMENT_CREATION) {
+        continue;
+      }
+      tryCreateIndexCreator(creatorsByIndex, index, context, config);
+    }
+    // TODO: Remove this when values stored as ForwardIndex stop depending on TextIndex config
+    IndexCreator oldFwdCreator = creatorsByIndex.get(forwardIdx);
+    if (oldFwdCreator != null) {
+      Object fakeForwardValue = calculateRawValueForTextIndex(context.isDictionaryEnabled(), config,
+          context.getFieldSpec());
+      if (fakeForwardValue != null) {
+        ForwardIndexCreator castedOldFwdCreator = (ForwardIndexCreator) oldFwdCreator;
+        SameValueForwardIndexCreator fakeValueFwdCreator =
+            new SameValueForwardIndexCreator(fakeForwardValue, castedOldFwdCreator);
+        creatorsByIndex.put(forwardIdx, fakeValueFwdCreator);
+      }
+    }
+    _creatorsByColAndIndex.put(columnName, creatorsByIndex);
+  }
+
+  private void createDictionaryForColumn(IndexCreationContext.Common context, FieldIndexConfigs config,
+      String columnName) throws Exception {
+    // Create dictionary-encoded index
+    // Initialize dictionary creator
+    // TODO: Dictionary creator holds all unique values on heap. Consider keeping dictionary instead of creator
+    //       which uses off-heap memory.
+
+    DictionaryIndexConfig dictConfig = config.getConfig(StandardIndexes.dictionary());
+    if (!dictConfig.isEnabled()) {
+      LOGGER.info("Creating dictionary index in column {}.{} even when it is disabled in config",
+          _config.getTableName(), columnName);
+    }
+    SegmentDictionaryCreator creator =
+        new DictionaryIndexPlugin().getIndexType().createIndexCreator(context, dictConfig);
+
+    try {
+      creator.build(context.getSortedUniqueElementsArray());
+    } catch (Exception e) {
+      LOGGER.error("Error building dictionary for field: {}, cardinality: {}, number of bytes per entry: {}",
+          context.getFieldSpec().getName(), context.getCardinality(), creator.getNumBytesPerEntry());
+      throw e;
+    }
+
+    _dictionaryCreatorMap.put(columnName, creator);
+  }
+
+//Refactoring end
 
   private boolean isNullable(FieldSpec fieldSpec) {
     return _schema.isEnableColumnBasedNullHandling() ? fieldSpec.isNullable() : _config.isNullHandlingEnabled();

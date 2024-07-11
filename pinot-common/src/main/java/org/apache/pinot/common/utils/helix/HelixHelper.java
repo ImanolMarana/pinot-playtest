@@ -124,6 +124,13 @@ public class HelixHelper {
             return false;
           }
 
+          return handleIdealStateUpdate(dataAccessor, resourceName, idealState, updatedIdealState, noChangeOk,
+              idealStateWrapper);
+        }
+
+        private Boolean handleIdealStateUpdate(HelixDataAccessor dataAccessor, String resourceName,
+            IdealState idealState, IdealState updatedIdealState, boolean noChangeOk,
+            IdealStateWrapper idealStateWrapper) {
           // If there are changes to apply, apply them
           if (updatedIdealState != null && !idealState.equals(updatedIdealState)) {
             ZNRecord updatedZNRecord = updatedIdealState.getRecord();
@@ -132,76 +139,71 @@ public class HelixHelper {
             int numPartitions = updatedZNRecord.getMapFields().size();
             updatedIdealState.setNumPartitions(numPartitions);
 
-            // If the ideal state is large enough, enable compression
-            boolean enableCompression = shouldCompress(updatedIdealState);
-            if (enableCompression) {
-              updatedZNRecord.setBooleanField(ENABLE_COMPRESSIONS_KEY, true);
-            } else {
-              updatedZNRecord.getSimpleFields().remove(ENABLE_COMPRESSIONS_KEY);
-            }
+            updateCompression(updatedIdealState, updatedZNRecord);
 
-            // Check version and set ideal state
-            try {
-              if (dataAccessor.getBaseDataAccessor()
-                  .set(idealStateKey.getPath(), updatedZNRecord, idealState.getRecord().getVersion(),
-                      AccessOption.PERSISTENT)) {
-                idealStateWrapper._idealState = updatedIdealState;
-                return true;
-              } else {
-                LOGGER.warn("Failed to update ideal state for resource: {}", resourceName);
-                return false;
-              }
-            } catch (ZkBadVersionException e) {
-              LOGGER.warn("Version changed while updating ideal state for resource: {}", resourceName);
-              return false;
-            } catch (Exception e) {
-              LOGGER.warn("Caught exception while updating ideal state for resource: {} (compressed={})", resourceName,
-                  enableCompression, e);
-              return false;
-            }
+            return attemptToUpdateIdealState(dataAccessor, resourceName, idealState, updatedIdealState,
+                updatedZNRecord, idealStateWrapper);
           } else {
-            if (noChangeOk) {
-              LOGGER.info("Idempotent or null ideal state update for resource {}, skipping update.", resourceName);
-            } else {
-              LOGGER.warn("Idempotent or null ideal state update for resource {}, skipping update.", resourceName);
-            }
-            idealStateWrapper._idealState = idealState;
-            return true;
+            return handleIdempotentUpdate(resourceName, noChangeOk, idealState, idealStateWrapper);
           }
         }
 
-        private boolean shouldCompress(IdealState is) {
-          if (is.getNumPartitions() > NUM_PARTITIONS_THRESHOLD_TO_ENABLE_COMPRESSION) {
-            return true;
+        private void updateCompression(IdealState updatedIdealState, ZNRecord updatedZNRecord) {
+          // If the ideal state is large enough, enable compression
+          boolean enableCompression = shouldCompress(updatedIdealState);
+          if (enableCompression) {
+            updatedZNRecord.setBooleanField(ENABLE_COMPRESSIONS_KEY, true);
+          } else {
+            updatedZNRecord.getSimpleFields().remove(ENABLE_COMPRESSIONS_KEY);
           }
+        }
 
-          // Find the number of characters in one partition in idealstate, and extrapolate
-          // to estimate the number of characters.
-          // We could serialize the znode to determine the exact size, but that would mean serializing every
-          // idealstate znode twice. We avoid some extra GC by estimating the size instead. Such estimations
-          // should be good for most installations that have similar segment and instance names.
-          Iterator<String> it = is.getPartitionSet().iterator();
-          if (it.hasNext()) {
-            String partitionName = it.next();
-            int numChars = partitionName.length();
-            Map<String, String> stateMap = is.getInstanceStateMap(partitionName);
-            for (Map.Entry<String, String> entry : stateMap.entrySet()) {
-              numChars += entry.getKey().length();
-              numChars += entry.getValue().length();
-            }
-            numChars *= is.getNumPartitions();
-            if (_minNumCharsInISToTurnOnCompression > 0
-                && numChars > _minNumCharsInISToTurnOnCompression) {
+        private boolean attemptToUpdateIdealState(HelixDataAccessor dataAccessor, String resourceName,
+            IdealState idealState, IdealState updatedIdealState, ZNRecord updatedZNRecord,
+            IdealStateWrapper idealStateWrapper) {
+          // Check version and set ideal state
+          try {
+            if (dataAccessor.getBaseDataAccessor()
+                .set(idealStateKey.getPath(), updatedZNRecord, idealState.getRecord().getVersion(),
+                    AccessOption.PERSISTENT)) {
+              idealStateWrapper._idealState = updatedIdealState;
               return true;
+            } else {
+              LOGGER.warn("Failed to update ideal state for resource: {}", resourceName);
+              return false;
             }
+          } catch (ZkBadVersionException e) {
+            LOGGER.warn("Version changed while updating ideal state for resource: {}", resourceName);
+            return false;
+          } catch (Exception e) {
+            boolean enableCompression = updatedZNRecord.getBooleanField(ENABLE_COMPRESSIONS_KEY, false);
+            LOGGER.warn("Caught exception while updating ideal state for resource: {} (compressed={})", resourceName,
+                enableCompression, e);
+            return false;
           }
-          return false;
+        }
+
+        private Boolean handleIdempotentUpdate(String resourceName, boolean noChangeOk, IdealState idealState,
+            IdealStateWrapper idealStateWrapper) {
+          if (noChangeOk) {
+            LOGGER.info("Idempotent or null ideal state update for resource {}, skipping update.", resourceName);
+          } else {
+            LOGGER.warn("Idempotent or null ideal state update for resource {}, skipping update.", resourceName);
+          }
+          idealStateWrapper._idealState = idealState;
+          return true;
         }
       });
       return idealStateWrapper._idealState;
     } catch (Exception e) {
       throw new RuntimeException("Caught exception while updating ideal state for resource: " + resourceName, e);
     }
+  }
+
+  private static class IdealStateWrapper {
+    IdealState _idealState;
+  }
+//Refactoring end
   }
 
   private static class IdealStateWrapper {

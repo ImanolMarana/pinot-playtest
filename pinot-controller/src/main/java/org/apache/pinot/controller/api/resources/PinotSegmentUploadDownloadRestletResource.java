@@ -243,160 +243,34 @@ public class PinotSegmentUploadDownloadRestletResource {
     String sourceDownloadURIStr = extractHttpHeader(headers, FileUploadDownloadClient.CustomHeaders.DOWNLOAD_URI);
     String crypterClassNameInHeader = extractHttpHeader(headers, FileUploadDownloadClient.CustomHeaders.CRYPTER);
     String ingestionDescriptor = extractHttpHeader(headers, CommonConstants.Controller.INGESTION_DESCRIPTOR);
+    String copySegmentToDeepStore =
+        extractHttpHeader(headers, FileUploadDownloadClient.CustomHeaders.COPY_SEGMENT_TO_DEEP_STORE);
+    copySegmentToFinalLocation = getCopySegmentToFinalLocation(copySegmentToFinalLocation, copySegmentToDeepStore);
+    FileUploadType uploadType = getUploadType(uploadTypeStr);
 
-    File tempEncryptedFile = null;
-    File tempDecryptedFile = null;
-    File tempSegmentDir = null;
-    // The downloadUri for putting into segment zk metadata
-    String segmentDownloadURIStr = sourceDownloadURIStr;
     try {
-      ControllerFilePathProvider provider = ControllerFilePathProvider.getInstance();
-      String tempFileName = TMP_DIR_PREFIX + UUID.randomUUID();
-      tempEncryptedFile = new File(provider.getFileUploadTempDir(), tempFileName + ENCRYPTED_SUFFIX);
-      tempDecryptedFile = new File(provider.getFileUploadTempDir(), tempFileName);
-      tempSegmentDir = new File(provider.getUntarredFileTempDir(), tempFileName);
-
-      boolean uploadedSegmentIsEncrypted = StringUtils.isNotEmpty(crypterClassNameInHeader);
-      FileUploadType uploadType = getUploadType(uploadTypeStr);
-      File destFile = uploadedSegmentIsEncrypted ? tempEncryptedFile : tempDecryptedFile;
-      long segmentSizeInBytes;
-      switch (uploadType) {
-        case SEGMENT:
-          if (multiPart == null) {
-            throw new ControllerApplicationException(LOGGER,
-                "Segment file (as multipart/form-data) is required for SEGMENT upload mode",
-                Response.Status.BAD_REQUEST);
-          }
-          if (!copySegmentToFinalLocation && StringUtils.isEmpty(sourceDownloadURIStr)) {
-            throw new ControllerApplicationException(LOGGER,
-                "Source download URI is required in header field 'DOWNLOAD_URI' if segment should not be copied to "
-                    + "the deep store",
-                Response.Status.BAD_REQUEST);
-          }
-          createSegmentFileFromMultipart(multiPart, destFile);
-          segmentSizeInBytes = destFile.length();
-          break;
-        case URI:
-          if (StringUtils.isEmpty(sourceDownloadURIStr)) {
-            throw new ControllerApplicationException(LOGGER,
-                "Source download URI is required in header field 'DOWNLOAD_URI' for URI upload mode",
-                Response.Status.BAD_REQUEST);
-          }
-          downloadSegmentFileFromURI(sourceDownloadURIStr, destFile, tableName);
-          segmentSizeInBytes = destFile.length();
-          break;
-        case METADATA:
-          if (multiPart == null) {
-            throw new ControllerApplicationException(LOGGER,
-                "Segment metadata file (as multipart/form-data) is required for METADATA upload mode",
-                Response.Status.BAD_REQUEST);
-          }
-          if (StringUtils.isEmpty(sourceDownloadURIStr)) {
-            throw new ControllerApplicationException(LOGGER,
-                "Source download URI is required in header field 'DOWNLOAD_URI' for METADATA upload mode",
-                Response.Status.BAD_REQUEST);
-          }
-          // override copySegmentToFinalLocation if override provided in headers:COPY_SEGMENT_TO_DEEP_STORE
-          // else set to false for backward compatibility
-          String copySegmentToDeepStore =
-              extractHttpHeader(headers, FileUploadDownloadClient.CustomHeaders.COPY_SEGMENT_TO_DEEP_STORE);
-          copySegmentToFinalLocation = Boolean.parseBoolean(copySegmentToDeepStore);
-          createSegmentFileFromMultipart(multiPart, destFile);
-          try {
-            URI segmentURI = new URI(sourceDownloadURIStr);
-            PinotFS pinotFS = PinotFSFactory.create(segmentURI.getScheme());
-            segmentSizeInBytes = pinotFS.length(segmentURI);
-          } catch (Exception e) {
-            segmentSizeInBytes = -1;
-            LOGGER.warn("Could not fetch segment size for metadata push", e);
-          }
-          break;
-        default:
-          throw new ControllerApplicationException(LOGGER, "Unsupported upload type: " + uploadType,
-              Response.Status.BAD_REQUEST);
-      }
-
-      if (uploadedSegmentIsEncrypted) {
-        decryptFile(crypterClassNameInHeader, tempEncryptedFile, tempDecryptedFile);
-      }
-
-      String metadataProviderClass = DefaultMetadataExtractor.class.getName();
-      SegmentMetadata segmentMetadata = getSegmentMetadata(tempDecryptedFile, tempSegmentDir, metadataProviderClass);
-
-      // Fetch segment name
-      String segmentName = segmentMetadata.getName();
-
-      // Fetch table name. Try to derive the table name from the parameter and then from segment metadata
-      String rawTableName;
-      if (StringUtils.isNotEmpty(tableName)) {
-        rawTableName = TableNameBuilder.extractRawTableName(tableName);
-      } else {
-        // TODO: remove this when we completely deprecate the table name from segment metadata
-        rawTableName = segmentMetadata.getTableName();
-        LOGGER.warn("Table name is not provided as request query parameter when uploading segment: {} for table: {}",
-            segmentName, rawTableName);
-      }
-      String tableNameWithType = tableType == TableType.OFFLINE
-          ? TableNameBuilder.OFFLINE.tableNameWithType(rawTableName)
-          : TableNameBuilder.REALTIME.tableNameWithType(rawTableName);
+      UploadSegmentResult uploadSegmentResult = prepareSegmentUpload(tableName, tableType, multiPart,
+          copySegmentToFinalLocation, sourceDownloadURIStr, crypterClassNameInHeader, uploadType);
 
       String clientAddress = InetAddress.getByName(request.getRemoteAddr()).getHostName();
-      LOGGER.info("Processing upload request for segment: {} of table: {} with upload type: {} from client: {}, "
-          + "ingestion descriptor: {}", segmentName, tableNameWithType, uploadType, clientAddress, ingestionDescriptor);
+      LOGGER.info(
+          "Processing upload request for segment: {} of table: {} with upload type: {} from client: {}, "
+              + "ingestion descriptor: {}", uploadSegmentResult.segmentName, uploadSegmentResult.tableNameWithType,
+          uploadType, clientAddress, ingestionDescriptor);
 
-      // Validate segment
-      TableConfig tableConfig = _pinotHelixResourceManager.getTableConfig(tableNameWithType);
-      if (tableConfig == null) {
-        throw new ControllerApplicationException(LOGGER, "Failed to find table: " + tableNameWithType,
-            Response.Status.BAD_REQUEST);
-      }
-      if (tableConfig.getIngestionConfig() == null || tableConfig.getIngestionConfig().isSegmentTimeValueCheck()) {
-        SegmentValidationUtils.validateTimeInterval(segmentMetadata, tableConfig);
-      }
-      long untarredSegmentSizeInBytes;
-      if (uploadType == FileUploadType.METADATA && segmentSizeInBytes > 0) {
-        // TODO: Include the untarred segment size when using the METADATA push rest API. Currently we can only use the
-        //       tarred segment size as an approximation.
-        untarredSegmentSizeInBytes = segmentSizeInBytes;
-      } else {
-        untarredSegmentSizeInBytes = FileUtils.sizeOfDirectory(tempSegmentDir);
-      }
-      SegmentValidationUtils.checkStorageQuota(segmentName, untarredSegmentSizeInBytes, tableConfig,
-          _pinotHelixResourceManager, _controllerConf, _controllerMetrics, _connectionManager, _executor,
-          _leadControllerManager);
+      TableConfig tableConfig = validateSegmentAndFetchTableConfig(uploadSegmentResult.tableNameWithType,
+          uploadSegmentResult.segmentMetadata);
 
-      // Encrypt segment
-      String crypterNameInTableConfig = tableConfig.getValidationConfig().getCrypterClassName();
-      Pair<String, File> encryptionInfo =
-          encryptSegmentIfNeeded(tempDecryptedFile, tempEncryptedFile, uploadedSegmentIsEncrypted,
-              crypterClassNameInHeader, crypterNameInTableConfig, segmentName, tableNameWithType);
+      SegmentEncryptionResult segmentEncryptionResult = handleSegmentEncryption(tableConfig,
+          uploadSegmentResult.tempDecryptedFile, uploadSegmentResult.tempEncryptedFile,
+          uploadSegmentResult.uploadedSegmentIsEncrypted, crypterClassNameInHeader, uploadSegmentResult.segmentName,
+          uploadSegmentResult.tableNameWithType);
 
-      String crypterName = encryptionInfo.getLeft();
-      File segmentFile = encryptionInfo.getRight();
+      updateZkWithSegmentMetadata(tableName, tableType, uploadType, copySegmentToFinalLocation,
+          uploadSegmentResult, segmentEncryptionResult, headers, request);
 
-      // Update download URI if controller is responsible for moving the segment to the deep store
-      URI finalSegmentLocationURI = null;
-      if (copySegmentToFinalLocation) {
-        URI dataDirURI = provider.getDataDirURI();
-        String dataDirPath = dataDirURI.toString();
-        String encodedSegmentName = URIUtils.encode(segmentName);
-        String finalSegmentLocationPath = URIUtils.getPath(dataDirPath, rawTableName, encodedSegmentName);
-        if (dataDirURI.getScheme().equalsIgnoreCase(CommonConstants.Segment.LOCAL_SEGMENT_SCHEME)) {
-          segmentDownloadURIStr = URIUtils.getPath(provider.getVip(), "segments", rawTableName, encodedSegmentName);
-        } else {
-          segmentDownloadURIStr = finalSegmentLocationPath;
-        }
-        finalSegmentLocationURI = URIUtils.getUri(finalSegmentLocationPath);
-      }
-      LOGGER.info("Using segment download URI: {} for segment: {} of table: {} (move segment: {})",
-          segmentDownloadURIStr, segmentFile, tableNameWithType, copySegmentToFinalLocation);
-
-      ZKOperator zkOperator = new ZKOperator(_pinotHelixResourceManager, _controllerConf, _controllerMetrics);
-      zkOperator.completeSegmentOperations(tableNameWithType, segmentMetadata, uploadType, finalSegmentLocationURI,
-          segmentFile, sourceDownloadURIStr, segmentDownloadURIStr, crypterName, segmentSizeInBytes,
-          enableParallelPushProtection, allowRefresh, headers);
-
-      return new SuccessResponse("Successfully uploaded segment: " + segmentName + " of table: " + tableNameWithType);
+      return new SuccessResponse("Successfully uploaded segment: " + uploadSegmentResult.segmentName + " of table: "
+          + uploadSegmentResult.tableNameWithType);
     } catch (WebApplicationException e) {
       throw e;
     } catch (Exception e) {
@@ -404,10 +278,232 @@ public class PinotSegmentUploadDownloadRestletResource {
       throw new ControllerApplicationException(LOGGER, "Exception while uploading segment: " + e.getMessage(),
           Response.Status.INTERNAL_SERVER_ERROR, e);
     } finally {
-      FileUtils.deleteQuietly(tempEncryptedFile);
-      FileUtils.deleteQuietly(tempDecryptedFile);
-      FileUtils.deleteQuietly(tempSegmentDir);
+      FileUtils.deleteQuietly(uploadSegmentResult.tempEncryptedFile);
+      FileUtils.deleteQuietly(uploadSegmentResult.tempDecryptedFile);
+      FileUtils.deleteQuietly(uploadSegmentResult.tempSegmentDir);
     }
+  }
+  
+  private boolean getCopySegmentToFinalLocation(boolean copySegmentToFinalLocation, String copySegmentToDeepStore) {
+    if (copySegmentToDeepStore != null) {
+      copySegmentToFinalLocation = Boolean.parseBoolean(copySegmentToDeepStore);
+    } else {
+      copySegmentToFinalLocation = true;
+    }
+    return copySegmentToFinalLocation;
+  }
+
+  private void updateZkWithSegmentMetadata(String tableName, TableType tableType, FileUploadType uploadType,
+      boolean copySegmentToFinalLocation, UploadSegmentResult uploadSegmentResult,
+      SegmentEncryptionResult segmentEncryptionResult, HttpHeaders headers, Request request) throws Exception {
+    // Update download URI if controller is responsible for moving the segment to the deep store
+    String segmentDownloadURIStr = uploadSegmentResult.segmentDownloadURIStr;
+    if (copySegmentToFinalLocation) {
+      segmentDownloadURIStr = updateDownloadURI(tableName, uploadSegmentResult.segmentName);
+    }
+    LOGGER.info("Using segment download URI: {} for segment: {} of table: {} (move segment: {})",
+        segmentDownloadURIStr, segmentEncryptionResult.segmentFile, uploadSegmentResult.tableNameWithType,
+        copySegmentToFinalLocation);
+
+    ZKOperator zkOperator = new ZKOperator(_pinotHelixResourceManager, _controllerConf, _controllerMetrics);
+    zkOperator.completeSegmentOperations(uploadSegmentResult.tableNameWithType, uploadSegmentResult.segmentMetadata,
+        uploadType, uploadSegmentResult.finalSegmentLocationURI, segmentEncryptionResult.segmentFile,
+        uploadSegmentResult.sourceDownloadURIStr, segmentDownloadURIStr, segmentEncryptionResult.crypterName,
+        uploadSegmentResult.segmentSizeInBytes, enableParallelPushProtection, allowRefresh, headers);
+  }
+
+  private SegmentEncryptionResult handleSegmentEncryption(TableConfig tableConfig, File tempDecryptedFile,
+      File tempEncryptedFile, boolean uploadedSegmentIsEncrypted, String crypterUsedInUploadedSegment,
+      String segmentName, String tableNameWithType) {
+    // Encrypt segment
+    String crypterNameInTableConfig = tableConfig.getValidationConfig().getCrypterClassName();
+    return encryptSegmentIfNeeded(tempDecryptedFile, tempEncryptedFile, uploadedSegmentIsEncrypted,
+        crypterUsedInUploadedSegment, crypterNameInTableConfig, segmentName, tableNameWithType);
+  }
+
+  private TableConfig validateSegmentAndFetchTableConfig(String tableNameWithType, SegmentMetadata segmentMetadata) {
+    // Validate segment
+    TableConfig tableConfig = _pinotHelixResourceManager.getTableConfig(tableNameWithType);
+    if (tableConfig == null) {
+      throw new ControllerApplicationException(LOGGER, "Failed to find table: " + tableNameWithType,
+          Response.Status.BAD_REQUEST);
+    }
+    if (tableConfig.getIngestionConfig() == null || tableConfig.getIngestionConfig().isSegmentTimeValueCheck()) {
+      SegmentValidationUtils.validateTimeInterval(segmentMetadata, tableConfig);
+    }
+    long untarredSegmentSizeInBytes;
+    if (uploadType == FileUploadType.METADATA && segmentSizeInBytes > 0) {
+      // TODO: Include the untarred segment size when using the METADATA push rest API. Currently we can only use the
+      //       tarred segment size as an approximation.
+      untarredSegmentSizeInBytes = segmentSizeInBytes;
+    } else {
+      untarredSegmentSizeInBytes = FileUtils.sizeOfDirectory(tempSegmentDir);
+    }
+    SegmentValidationUtils.checkStorageQuota(segmentName, untarredSegmentSizeInBytes, tableConfig,
+        _pinotHelixResourceManager, _controllerConf, _controllerMetrics, _connectionManager, _executor,
+        _leadControllerManager);
+    return tableConfig;
+  }
+
+  private UploadSegmentResult prepareSegmentUpload(String tableName, TableType tableType,
+      @Nullable FormDataMultiPart multiPart, boolean copySegmentToFinalLocation, String sourceDownloadURIStr,
+      String crypterClassNameInHeader, FileUploadType uploadType) throws Exception {
+    ControllerFilePathProvider provider = ControllerFilePathProvider.getInstance();
+    String tempFileName = TMP_DIR_PREFIX + UUID.randomUUID();
+    File tempEncryptedFile = new File(provider.getFileUploadTempDir(), tempFileName + ENCRYPTED_SUFFIX);
+    File tempDecryptedFile = new File(provider.getFileUploadTempDir(), tempFileName);
+    File tempSegmentDir = new File(provider.getUntarredFileTempDir(), tempFileName);
+
+    boolean uploadedSegmentIsEncrypted = StringUtils.isNotEmpty(crypterClassNameInHeader);
+    File destFile = uploadedSegmentIsEncrypted ? tempEncryptedFile : tempDecryptedFile;
+    long segmentSizeInBytes = 0;
+    switch (uploadType) {
+      case SEGMENT:
+        if (multiPart == null) {
+          throw new ControllerApplicationException(LOGGER,
+              "Segment file (as multipart/form-data) is required for SEGMENT upload mode",
+              Response.Status.BAD_REQUEST);
+        }
+        if (!copySegmentToFinalLocation && StringUtils.isEmpty(sourceDownloadURIStr)) {
+          throw new ControllerApplicationException(LOGGER,
+              "Source download URI is required in header field 'DOWNLOAD_URI' if segment should not be copied to "
+                  + "the deep store",
+              Response.Status.BAD_REQUEST);
+        }
+        createSegmentFileFromMultipart(multiPart, destFile);
+        segmentSizeInBytes = destFile.length();
+        break;
+      case URI:
+        if (StringUtils.isEmpty(sourceDownloadURIStr)) {
+          throw new ControllerApplicationException(LOGGER,
+              "Source download URI is required in header field 'DOWNLOAD_URI' for URI upload mode",
+              Response.Status.BAD_REQUEST);
+        }
+        downloadSegmentFileFromURI(sourceDownloadURIStr, destFile, tableName);
+        segmentSizeInBytes = destFile.length();
+        break;
+      case METADATA:
+        if (multiPart == null) {
+          throw new ControllerApplicationException(LOGGER,
+              "Segment metadata file (as multipart/form-data) is required for METADATA upload mode",
+              Response.Status.BAD_REQUEST);
+        }
+        if (StringUtils.isEmpty(sourceDownloadURIStr)) {
+          throw new ControllerApplicationException(LOGGER,
+              "Source download URI is required in header field 'DOWNLOAD_URI' for METADATA upload mode",
+              Response.Status.BAD_REQUEST);
+        }
+        createSegmentFileFromMultipart(multiPart, destFile);
+        try {
+          URI segmentURI = new URI(sourceDownloadURIStr);
+          PinotFS pinotFS = PinotFSFactory.create(segmentURI.getScheme());
+          segmentSizeInBytes = pinotFS.length(segmentURI);
+        } catch (Exception e) {
+          segmentSizeInBytes = -1;
+          LOGGER.warn("Could not fetch segment size for metadata push", e);
+        }
+        break;
+      default:
+        throw new ControllerApplicationException(LOGGER, "Unsupported upload type: " + uploadType,
+            Response.Status.BAD_REQUEST);
+    }
+
+    if (uploadedSegmentIsEncrypted) {
+      decryptFile(crypterClassNameInHeader, tempEncryptedFile, tempDecryptedFile);
+    }
+
+    String metadataProviderClass = DefaultMetadataExtractor.class.getName();
+    SegmentMetadata segmentMetadata = getSegmentMetadata(tempDecryptedFile, tempSegmentDir, metadataProviderClass);
+
+    // Fetch segment name
+    String segmentName = segmentMetadata.getName();
+
+    // Fetch table name. Try to derive the table name from the parameter and then from segment metadata
+    String rawTableName = getRawTableName(tableName, segmentMetadata, segmentName);
+
+    String tableNameWithType = tableType == TableType.OFFLINE
+        ? TableNameBuilder.OFFLINE.tableNameWithType(rawTableName)
+        : TableNameBuilder.REALTIME.tableNameWithType(rawTableName);
+    // The downloadUri for putting into segment zk metadata
+    String segmentDownloadURIStr = sourceDownloadURIStr;
+    URI finalSegmentLocationURI = null;
+
+    return new UploadSegmentResult(tempEncryptedFile, tempDecryptedFile, tempSegmentDir,
+        uploadedSegmentIsEncrypted, segmentSizeInBytes, segmentMetadata, segmentName, tableNameWithType,
+        segmentDownloadURIStr, finalSegmentLocationURI, sourceDownloadURIStr);
+  }
+
+  private String getRawTableName(String tableName, SegmentMetadata segmentMetadata, String segmentName) {
+    String rawTableName;
+    if (StringUtils.isNotEmpty(tableName)) {
+      rawTableName = TableNameBuilder.extractRawTableName(tableName);
+    } else {
+      // TODO: remove this when we completely deprecate the table name from segment metadata
+      rawTableName = segmentMetadata.getTableName();
+      LOGGER.warn("Table name is not provided as request query parameter when uploading segment: {} for table: {}",
+          segmentName, rawTableName);
+    }
+    return rawTableName;
+  }
+
+  private String updateDownloadURI(String rawTableName, String segmentName) throws Exception {
+    URI dataDirURI = ControllerFilePathProvider.getInstance().getDataDirURI();
+    String dataDirPath = dataDirURI.toString();
+    String encodedSegmentName = URIUtils.encode(segmentName);
+    String finalSegmentLocationPath = URIUtils.getPath(dataDirPath, rawTableName, encodedSegmentName);
+    String segmentDownloadURIStr;
+    if (dataDirURI.getScheme().equalsIgnoreCase(CommonConstants.Segment.LOCAL_SEGMENT_SCHEME)) {
+      segmentDownloadURIStr = URIUtils
+          .getPath(ControllerFilePathProvider.getInstance().getVip(), "segments", rawTableName, encodedSegmentName);
+    } else {
+      segmentDownloadURIStr = finalSegmentLocationPath;
+    }
+    finalSegmentLocationURI = URIUtils.getUri(finalSegmentLocationPath);
+    return segmentDownloadURIStr;
+  }
+
+  private static class UploadSegmentResult {
+    File tempEncryptedFile;
+    File tempDecryptedFile;
+    File tempSegmentDir;
+    boolean uploadedSegmentIsEncrypted;
+    long segmentSizeInBytes;
+    SegmentMetadata segmentMetadata;
+    String segmentName;
+    String tableNameWithType;
+    // The downloadUri for putting into segment zk metadata
+    String segmentDownloadURIStr;
+    URI finalSegmentLocationURI;
+    String sourceDownloadURIStr;
+
+    public UploadSegmentResult(File tempEncryptedFile, File tempDecryptedFile, File tempSegmentDir,
+        boolean uploadedSegmentIsEncrypted, long segmentSizeInBytes, SegmentMetadata segmentMetadata,
+        String segmentName, String tableNameWithType, String segmentDownloadURIStr, URI finalSegmentLocationURI,
+        String sourceDownloadURIStr) {
+      this.tempEncryptedFile = tempEncryptedFile;
+      this.tempDecryptedFile = tempDecryptedFile;
+      this.tempSegmentDir = tempSegmentDir;
+      this.uploadedSegmentIsEncrypted = uploadedSegmentIsEncrypted;
+      this.segmentSizeInBytes = segmentSizeInBytes;
+      this.segmentMetadata = segmentMetadata;
+      this.segmentName = segmentName;
+      this.tableNameWithType = tableNameWithType;
+      this.segmentDownloadURIStr = segmentDownloadURIStr;
+      this.finalSegmentLocationURI = finalSegmentLocationURI;
+      this.sourceDownloadURIStr = sourceDownloadURIStr;
+    }
+  }
+
+  private static class SegmentEncryptionResult {
+    String crypterName;
+    File segmentFile;
+
+    public SegmentEncryptionResult(String crypterName, File segmentFile) {
+      this.crypterName = crypterName;
+      this.segmentFile = segmentFile;
+    }
+  }
+//Refactoring end
   }
 
   @Nullable

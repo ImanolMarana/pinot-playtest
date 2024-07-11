@@ -189,7 +189,7 @@ public class TablesResource {
   public String getSegmentMetadata(
       @ApiParam(value = "Table Name with type", required = true) @PathParam("tableName") String tableName,
       @ApiParam(value = "Column name", allowMultiple = true) @QueryParam("columns") @DefaultValue("")
-      List<String> columns, @Context HttpHeaders headers)
+          List<String> columns, @Context HttpHeaders headers)
       throws WebApplicationException {
     tableName = DatabaseUtils.translateTableName(tableName, headers);
     InstanceDataManager instanceDataManager = _serverInstance.getInstanceDataManager();
@@ -219,68 +219,8 @@ public class TablesResource {
     Set<String> columnSet = allColumns ? null : new HashSet<>(decodedColumns);
 
     List<SegmentDataManager> segmentDataManagers = tableDataManager.acquireAllSegments();
-    long totalSegmentSizeBytes = 0;
-    long totalNumRows = 0;
-    Map<String, Double> columnLengthMap = new HashMap<>();
-    Map<String, Double> columnCardinalityMap = new HashMap<>();
-    Map<String, Double> maxNumMultiValuesMap = new HashMap<>();
-    Map<String, Map<String, Double>> columnIndexSizesMap = new HashMap<>();
     try {
-      for (SegmentDataManager segmentDataManager : segmentDataManagers) {
-        if (segmentDataManager instanceof ImmutableSegmentDataManager) {
-          ImmutableSegment immutableSegment = (ImmutableSegment) segmentDataManager.getSegment();
-          long segmentSizeBytes = immutableSegment.getSegmentSizeBytes();
-          SegmentMetadataImpl segmentMetadata =
-              (SegmentMetadataImpl) segmentDataManager.getSegment().getSegmentMetadata();
-
-          totalSegmentSizeBytes += segmentSizeBytes;
-          totalNumRows += segmentMetadata.getTotalDocs();
-
-          if (columnSet == null) {
-            columnSet = segmentMetadata.getAllColumns();
-          } else {
-            columnSet.retainAll(segmentMetadata.getAllColumns());
-          }
-          for (String column : columnSet) {
-            ColumnMetadata columnMetadata = segmentMetadata.getColumnMetadataMap().get(column);
-            int columnLength = 0;
-            DataType storedDataType = columnMetadata.getDataType().getStoredType();
-            if (storedDataType.isFixedWidth()) {
-              // For type of fixed width: INT, LONG, FLOAT, DOUBLE, BOOLEAN (stored as INT), TIMESTAMP (stored as LONG),
-              // set the columnLength as the fixed width.
-              columnLength = storedDataType.size();
-            } else if (columnMetadata.hasDictionary()) {
-              // For type of variable width (String, Bytes), if it's stored using dictionary encoding, set the
-              // columnLength as the max length in dictionary.
-              columnLength = columnMetadata.getColumnMaxLength();
-            } else if (storedDataType == DataType.STRING || storedDataType == DataType.BYTES) {
-              // For type of variable width (String, Bytes), if it's stored using raw bytes, set the columnLength as
-              // the length of the max value.
-              if (columnMetadata.getMaxValue() != null) {
-                String maxValueString = (String) columnMetadata.getMaxValue();
-                columnLength = maxValueString.getBytes(StandardCharsets.UTF_8).length;
-              }
-            } else {
-              // For type of STRUCT, MAP, LIST, set the columnLength as DEFAULT_MAX_LENGTH (512).
-              columnLength = FieldSpec.DEFAULT_MAX_LENGTH;
-            }
-            int columnCardinality = columnMetadata.getCardinality();
-            columnLengthMap.merge(column, (double) columnLength, Double::sum);
-            columnCardinalityMap.merge(column, (double) columnCardinality, Double::sum);
-            if (!columnMetadata.isSingleValue()) {
-              int maxNumMultiValues = columnMetadata.getMaxNumberOfMultiValues();
-              maxNumMultiValuesMap.merge(column, (double) maxNumMultiValues, Double::sum);
-            }
-            for (Map.Entry<IndexType<?, ?, ?>, Long> entry : columnMetadata.getIndexSizeMap().entrySet()) {
-              String indexName = entry.getKey().getId();
-              Map<String, Double> columnIndexSizes = columnIndexSizesMap.getOrDefault(column, new HashMap<>());
-              Double indexSize = columnIndexSizes.getOrDefault(indexName, 0d) + entry.getValue();
-              columnIndexSizes.put(indexName, indexSize);
-              columnIndexSizesMap.put(column, columnIndexSizes);
-            }
-          }
-        }
-      }
+      return processSegmentDataManagers(segmentDataManagers, columnSet, tableDataManager);
     } finally {
       // we could release segmentDataManagers as we iterate in the loop above
       // but this is cleaner with clear semantics of usage. Also, above loop
@@ -289,9 +229,41 @@ public class TablesResource {
         tableDataManager.releaseSegment(segmentDataManager);
       }
     }
+  }
+
+  private String processSegmentDataManagers(List<SegmentDataManager> segmentDataManagers,
+      Set<String> columnSet, TableDataManager tableDataManager) {
+    long totalSegmentSizeBytes = 0;
+    long totalNumRows = 0;
+    Map<String, Double> columnLengthMap = new HashMap<>();
+    Map<String, Double> columnCardinalityMap = new HashMap<>();
+    Map<String, Double> maxNumMultiValuesMap = new HashMap<>();
+    Map<String, Map<String, Double>> columnIndexSizesMap = new HashMap<>();
+    for (SegmentDataManager segmentDataManager : segmentDataManagers) {
+      if (segmentDataManager instanceof ImmutableSegmentDataManager) {
+        ImmutableSegment immutableSegment = (ImmutableSegment) segmentDataManager.getSegment();
+        long segmentSizeBytes = immutableSegment.getSegmentSizeBytes();
+        SegmentMetadataImpl segmentMetadata =
+            (SegmentMetadataImpl) segmentDataManager.getSegment().getSegmentMetadata();
+
+        totalSegmentSizeBytes += segmentSizeBytes;
+        totalNumRows += segmentMetadata.getTotalDocs();
+
+        if (columnSet == null) {
+          columnSet = segmentMetadata.getAllColumns();
+        } else {
+          columnSet.retainAll(segmentMetadata.getAllColumns());
+        }
+        for (String column : columnSet) {
+          processColumnMetadata(column, segmentMetadata, columnLengthMap, columnCardinalityMap,
+              maxNumMultiValuesMap, columnIndexSizesMap);
+        }
+      }
+    }
 
     // fetch partition to primary key count for realtime tables that have upsert enabled
     Map<Integer, Long> upsertPartitionToPrimaryKeyCountMap = new HashMap<>();
+    InstanceDataManager instanceDataManager = _serverInstance.getInstanceDataManager();
     if (tableDataManager instanceof RealtimeTableDataManager) {
       RealtimeTableDataManager realtimeTableDataManager = (RealtimeTableDataManager) tableDataManager;
       upsertPartitionToPrimaryKeyCountMap = realtimeTableDataManager.getUpsertPartitionToPrimaryKeyCount();
@@ -309,6 +281,48 @@ public class TablesResource {
             upsertPartitionToServerPrimaryKeyCountMap);
     return ResourceUtils.convertToJsonString(tableMetadataInfo);
   }
+
+  private void processColumnMetadata(String column, SegmentMetadataImpl segmentMetadata,
+      Map<String, Double> columnLengthMap, Map<String, Double> columnCardinalityMap,
+      Map<String, Double> maxNumMultiValuesMap, Map<String, Map<String, Double>> columnIndexSizesMap) {
+    ColumnMetadata columnMetadata = segmentMetadata.getColumnMetadataMap().get(column);
+    int columnLength = 0;
+    DataType storedDataType = columnMetadata.getDataType().getStoredType();
+    if (storedDataType.isFixedWidth()) {
+      // For type of fixed width: INT, LONG, FLOAT, DOUBLE, BOOLEAN (stored as INT), TIMESTAMP (stored as LONG),
+      // set the columnLength as the fixed width.
+      columnLength = storedDataType.size();
+    } else if (columnMetadata.hasDictionary()) {
+      // For type of variable width (String, Bytes), if it's stored using dictionary encoding, set the
+      // columnLength as the max length in dictionary.
+      columnLength = columnMetadata.getColumnMaxLength();
+    } else if (storedDataType == DataType.STRING || storedDataType == DataType.BYTES) {
+      // For type of variable width (String, Bytes), if it's stored using raw bytes, set the columnLength as
+      // the length of the max value.
+      if (columnMetadata.getMaxValue() != null) {
+        String maxValueString = (String) columnMetadata.getMaxValue();
+        columnLength = maxValueString.getBytes(StandardCharsets.UTF_8).length;
+      }
+    } else {
+      // For type of STRUCT, MAP, LIST, set the columnLength as DEFAULT_MAX_LENGTH (512).
+      columnLength = FieldSpec.DEFAULT_MAX_LENGTH;
+    }
+    int columnCardinality = columnMetadata.getCardinality();
+    columnLengthMap.merge(column, (double) columnLength, Double::sum);
+    columnCardinalityMap.merge(column, (double) columnCardinality, Double::sum);
+    if (!columnMetadata.isSingleValue()) {
+      int maxNumMultiValues = columnMetadata.getMaxNumberOfMultiValues();
+      maxNumMultiValuesMap.merge(column, (double) maxNumMultiValues, Double::sum);
+    }
+    for (Map.Entry<IndexType<?, ?, ?>, Long> entry : columnMetadata.getIndexSizeMap().entrySet()) {
+      String indexName = entry.getKey().getId();
+      Map<String, Double> columnIndexSizes = columnIndexSizesMap.getOrDefault(column, new HashMap<>());
+      Double indexSize = columnIndexSizes.getOrDefault(indexName, 0d) + entry.getValue();
+      columnIndexSizes.put(indexName, indexSize);
+      columnIndexSizesMap.put(column, columnIndexSizes);
+    }
+  }
+//Refactoring end
 
   @GET
   @Encoded

@@ -53,6 +53,11 @@ public abstract class BaseBooleanAssertionTransformFunction extends BaseTransfor
     if (_nullHandlingEnabled) {
       nullBitmap = _transformFunction.getNullBitmap(valueBlock);
     }
+    processIntValues(nullBitmap, length, intValuesSV);
+    return _intValuesSV;
+  }
+
+  private void processIntValues(RoaringBitmap nullBitmap, int length, int[] intValuesSV) {
     if (nullBitmap != null) {
       for (int docId = 0; docId < length; docId++) {
         if (nullBitmap.contains(docId)) {
@@ -60,7 +65,7 @@ public abstract class BaseBooleanAssertionTransformFunction extends BaseTransfor
             _intValuesSV[docId] = 1;
           }
         } else if (valueEvaluatesToTrue(intValuesSV[docId])) {
-            _intValuesSV[docId] = 1;
+          _intValuesSV[docId] = 1;
         }
       }
     } else {
@@ -70,8 +75,9 @@ public abstract class BaseBooleanAssertionTransformFunction extends BaseTransfor
         }
       }
     }
-    return _intValuesSV;
   }
+
+//Refactoring end
 
   protected abstract boolean returnsTrueWhenValueIsNull();
 

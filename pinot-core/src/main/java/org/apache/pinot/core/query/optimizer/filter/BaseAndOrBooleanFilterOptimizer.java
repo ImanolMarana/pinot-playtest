@@ -83,44 +83,52 @@ public abstract class BaseAndOrBooleanFilterOptimizer implements FilterOptimizer
     Function function = expression.getFunctionCall();
     String operator = function.getOperator();
     List<Expression> operands = function.getOperands();
-    if (operator.equals(FilterKind.AND.name())) {
-      // If any of the literal operands are always false, then replace AND function with FALSE.
-      for (Expression operand : operands) {
-        if (operand.equals(FALSE)) {
-          return FALSE;
-        }
-      }
 
-      // Remove all Literal operands that are always true.
-      operands.removeIf(operand -> operand.equals(TRUE));
-      if (operands.isEmpty()) {
-        return TRUE;
-      }
-    } else if (operator.equals(FilterKind.OR.name())) {
-      // If any of the literal operands are always true, then replace OR function with TRUE
-      for (Expression operand : operands) {
-        if (operand.equals(TRUE)) {
-          return TRUE;
-        }
-      }
+    switch (operator) {
+      case "AND":
+        return optimizeAnd(operands);
+      case "OR":
+        return optimizeOr(operands);
+      case "NOT":
+        return optimizeNot(operands);
+      default:
+        return expression;
+    }
+  }
 
-      // Remove all Literal operands that are always false.
-      operands.removeIf(operand -> operand.equals(FALSE));
-      if (operands.isEmpty()) {
-        return FALSE;
-      }
-    } else if (operator.equals(FilterKind.NOT.name())) {
-      assert operands.size() == 1;
-      Expression operand = operands.get(0);
-      if (operand.equals(TRUE)) {
-        return FALSE;
-      }
+  private Expression optimizeAnd(List<Expression> operands) {
+    for (Expression operand : operands) {
       if (operand.equals(FALSE)) {
+        return FALSE;
+      }
+    }
+    operands.removeIf(operand -> operand.equals(TRUE));
+    return operands.isEmpty() ? TRUE : expression;
+  }
+
+  private Expression optimizeOr(List<Expression> operands) {
+    for (Expression operand : operands) {
+      if (operand.equals(TRUE)) {
         return TRUE;
       }
     }
+    operands.removeIf(operand -> operand.equals(FALSE));
+    return operands.isEmpty() ? FALSE : expression;
+  }
+
+  private Expression optimizeNot(List<Expression> operands) {
+    assert operands.size() == 1;
+    Expression operand = operands.get(0);
+    if (operand.equals(TRUE)) {
+      return FALSE;
+    }
+    if (operand.equals(FALSE)) {
+      return TRUE;
+    }
     return expression;
   }
+
+//Refactoring end
 
   /** Change the expression value to boolean literal with given value. */
   protected static Expression getExpressionFromBoolean(boolean value) {

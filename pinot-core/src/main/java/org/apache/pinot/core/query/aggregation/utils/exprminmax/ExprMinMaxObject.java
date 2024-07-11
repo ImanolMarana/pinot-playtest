@@ -281,48 +281,67 @@ public class ExprMinMaxObject implements ParentAggregationFunctionResultObject {
    * Merge two exprminMaxObjects
    */
   public ExprMinMaxObject merge(ExprMinMaxObject other, boolean isMax) {
-    if (_isNull && other._isNull) {
-      return this;
-    } else if (_isNull) {
-      return other;
+    if (_isNull) {
+      return handleNullMerge(other);
     } else if (other._isNull) {
       return this;
     } else {
-      int result;
-      Comparable[] key = getExtremumKey();
-      Comparable[] otherKey = other.getExtremumKey();
-      for (int i = 0; i < _sizeOfExtremumMeasuringKeys; i++) {
-        result = key[i].compareTo(otherKey[i]);
-        if (result != 0) {
-          // If the keys are not equal, return the object with the extremum key
-          if (isMax) {
-            return result > 0 ? this : other;
-          } else {
-            return result < 0 ? this : other;
-          }
-        }
-      }
-      // If the keys are equal, add the values of the other object to this object
-      if (!_mutable) {
-        // If the result is immutable, we need to copy the values from the serialized result to the mutable result
-        _mutable = true;
-        for (int i = 0; i < getNumberOfRows(); i++) {
-          Object[] val = new Object[_sizeOfExtremumProjectionVals];
-          for (int j = 0; j < _sizeOfExtremumProjectionVals; j++) {
-            val[j] = getField(i, j);
-          }
-          _extremumProjectionValues.add(val);
-        }
-      }
-      for (int i = 0; i < other.getNumberOfRows(); i++) {
-        Object[] val = new Object[_sizeOfExtremumProjectionVals];
-        for (int j = 0; j < _sizeOfExtremumProjectionVals; j++) {
-          val[j] = other.getField(i, j);
-        }
-        _extremumProjectionValues.add(val);
-      }
-      return this;
+      return handleNonNullMerge(other, isMax);
     }
+  }
+  
+  private ExprMinMaxObject handleNullMerge(ExprMinMaxObject other) {
+    return other._isNull ? this : other;
+  }
+  
+  private ExprMinMaxObject handleNonNullMerge(ExprMinMaxObject other, boolean isMax) {
+    int result;
+    Comparable[] key = getExtremumKey();
+    Comparable[] otherKey = other.getExtremumKey();
+    for (int i = 0; i < _sizeOfExtremumMeasuringKeys; i++) {
+      result = key[i].compareTo(otherKey[i]);
+      if (result != 0) {
+        return getExtremumObject(result, isMax, this, other);
+      }
+    }
+  
+    mergeProjectionValues(other);
+    return this;
+  }
+  
+  private ExprMinMaxObject getExtremumObject(int comparisonResult, boolean isMax, ExprMinMaxObject first,
+      ExprMinMaxObject second) {
+    if (isMax) {
+      return comparisonResult > 0 ? first : second;
+    } else {
+      return comparisonResult < 0 ? first : second;
+    }
+  }
+  
+  private void mergeProjectionValues(ExprMinMaxObject other) {
+    if (!_mutable) {
+      convertToMutable();
+    }
+    for (int i = 0; i < other.getNumberOfRows(); i++) {
+      _extremumProjectionValues.add(copyRowValues(other, i));
+    }
+  }
+  
+  private void convertToMutable() {
+    _mutable = true;
+    for (int i = 0; i < getNumberOfRows(); i++) {
+      _extremumProjectionValues.add(copyRowValues(this, i));
+    }
+  }
+  
+  private Object[] copyRowValues(ExprMinMaxObject source, int rowIndex) {
+    Object[] val = new Object[_sizeOfExtremumProjectionVals];
+    for (int j = 0; j < _sizeOfExtremumProjectionVals; j++) {
+      val[j] = source.getField(rowIndex, j);
+    }
+    return val;
+  }
+//Refactoring end
   }
 
   /**

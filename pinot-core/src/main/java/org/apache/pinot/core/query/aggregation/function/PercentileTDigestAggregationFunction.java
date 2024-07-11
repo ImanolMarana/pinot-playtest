@@ -165,34 +165,45 @@ public class PercentileTDigestAggregationFunction extends NullableSingleInputAgg
       Map<ExpressionContext, BlockValSet> blockValSetMap) {
     BlockValSet blockValSet = blockValSetMap.get(_expression);
     if (blockValSet.getValueType() != DataType.BYTES) {
-      double[] doubleValues = blockValSet.getDoubleValuesSV();
-      forEachNotNull(length, blockValSet, (from, to) -> {
-        for (int i = from; i < to; i++) {
-          double value = doubleValues[i];
-          for (int groupKey : groupKeysArray[i]) {
-            getDefaultTDigest(groupByResultHolder, groupKey, _compressionFactor).add(value);
-          }
-        }
-      });
+      aggregateGroupByMVForDoubleValues(length, groupKeysArray, groupByResultHolder, blockValSet);
     } else {
-      // Serialized QuantileDigest
-      byte[][] bytesValues = blockValSet.getBytesValuesSV();
-      forEachNotNull(length, blockValSet, (from, to) -> {
-        for (int i = from; i < to; i++) {
-          TDigest value = ObjectSerDeUtils.TDIGEST_SER_DE.deserialize(bytesValues[i]);
-          for (int groupKey : groupKeysArray[i]) {
-            TDigest tDigest = groupByResultHolder.getResult(groupKey);
-            if (tDigest != null) {
-              tDigest.add(value);
-            } else {
-              // Create a new TDigest for the group
-              groupByResultHolder.setValueForKey(groupKey, ObjectSerDeUtils.TDIGEST_SER_DE.deserialize(bytesValues[i]));
-            }
-          }
-        }
-      });
+      aggregateGroupByMVForBytesValues(length, groupKeysArray, groupByResultHolder, blockValSet);
     }
   }
+
+  private void aggregateGroupByMVForDoubleValues(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    double[] doubleValues = blockValSet.getDoubleValuesSV();
+    forEachNotNull(length, blockValSet, (from, to) -> {
+      for (int i = from; i < to; i++) {
+        double value = doubleValues[i];
+        for (int groupKey : groupKeysArray[i]) {
+          getDefaultTDigest(groupByResultHolder, groupKey, _compressionFactor).add(value);
+        }
+      }
+    });
+  }
+
+  private void aggregateGroupByMVForBytesValues(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    byte[][] bytesValues = blockValSet.getBytesValuesSV();
+    forEachNotNull(length, blockValSet, (from, to) -> {
+      for (int i = from; i < to; i++) {
+        TDigest value = ObjectSerDeUtils.TDIGEST_SER_DE.deserialize(bytesValues[i]);
+        for (int groupKey : groupKeysArray[i]) {
+          TDigest tDigest = groupByResultHolder.getResult(groupKey);
+          if (tDigest != null) {
+            tDigest.add(value);
+          } else {
+            // Create a new TDigest for the group
+            groupByResultHolder.setValueForKey(groupKey,
+                ObjectSerDeUtils.TDIGEST_SER_DE.deserialize(bytesValues[i]));
+          }
+        }
+      }
+    });
+  }
+//Refactoring end
 
   @Override
   public TDigest extractAggregationResult(AggregationResultHolder aggregationResultHolder) {

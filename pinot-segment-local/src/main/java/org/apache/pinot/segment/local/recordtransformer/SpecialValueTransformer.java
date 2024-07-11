@@ -87,29 +87,47 @@ public class SpecialValueTransformer implements RecordTransformer {
   @Override
   public GenericRow transform(GenericRow record) {
     for (String element : _specialValuesKeySet) {
-      Object value = record.getValue(element);
-      if (value instanceof Object[]) {
-        // Multi-valued column.
-        Object[] values = (Object[]) value;
-        int numValues = values.length;
-        List<Object> negativeZeroNanSanitizedValues = new ArrayList<>(numValues);
-        for (Object o : values) {
-          Object zeroTransformedValue = transformNegativeZero(o);
-          Object nanTransformedValue = transformNaN(zeroTransformedValue);
-          if (nanTransformedValue != null) {
-            negativeZeroNanSanitizedValues.add(nanTransformedValue);
-          }
-        }
-        record.putValue(element, negativeZeroNanSanitizedValues.toArray());
-      } else {
-        // Single-valued column.
-        Object zeroTransformedValue = transformNegativeZero(value);
-        Object nanTransformedValue = transformNaN(zeroTransformedValue);
-        if (nanTransformedValue != value) {
-          record.putValue(element, nanTransformedValue);
-        }
+      transformValue(record, element);
+    }
+    if (_negativeZeroConversionCount > 0 || _nanConversionCount > 0) {
+      LOGGER.debug("Converted {} -0.0s to 0.0 and {} NaNs to null", _negativeZeroConversionCount, _nanConversionCount);
+    }
+    return record;
+  }
+  
+  private void transformValue(GenericRow record, String element){
+    Object value = record.getValue(element);
+    if (value instanceof Object[]) {
+      // Multi-valued column.
+      record.putValue(element, transformMultivaluedColumn((Object[]) value));
+    } else {
+      // Single-valued column.
+      transformSinglevaluedColumn(record, element, value);
+    }
+  }
+  
+  private void transformSinglevaluedColumn(GenericRow record, String element, Object value){
+    Object zeroTransformedValue = transformNegativeZero(value);
+    Object nanTransformedValue = transformNaN(zeroTransformedValue);
+    if (nanTransformedValue != value) {
+      record.putValue(element, nanTransformedValue);
+    }
+  }
+  
+  private Object[] transformMultivaluedColumn(Object[] values){
+    int numValues = values.length;
+    List<Object> negativeZeroNanSanitizedValues = new ArrayList<>(numValues);
+    for (Object o : values) {
+      Object zeroTransformedValue = transformNegativeZero(o);
+      Object nanTransformedValue = transformNaN(zeroTransformedValue);
+      if (nanTransformedValue != null) {
+        negativeZeroNanSanitizedValues.add(nanTransformedValue);
       }
     }
+    return negativeZeroNanSanitizedValues.toArray();
+  }
+
+//Refactoring end
     if (_negativeZeroConversionCount > 0 || _nanConversionCount > 0) {
       LOGGER.debug("Converted {} -0.0s to 0.0 and {} NaNs to null", _negativeZeroConversionCount, _nanConversionCount);
     }

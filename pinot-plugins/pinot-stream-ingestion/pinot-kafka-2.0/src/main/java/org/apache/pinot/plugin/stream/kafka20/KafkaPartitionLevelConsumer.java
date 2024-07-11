@@ -55,17 +55,71 @@ public class KafkaPartitionLevelConsumer extends KafkaPartitionLevelConnectionHa
     if (LOGGER.isDebugEnabled()) {
       LOGGER.debug("Polling partition: {}, startOffset: {}, timeout: {}ms", _topicPartition, startOffset, timeoutMs);
     }
+
+    seekToOffsetIfNeeded(startOffset);
+
+    ConsumerRecords<String, Bytes> consumerRecords = _consumer.poll(Duration.ofMillis(timeoutMs));
+    List<ConsumerRecord<String, Bytes>> records = consumerRecords.records(_topicPartition);
+    return processConsumerRecords(records, startOffset);
+  }
+
+  private void seekToOffsetIfNeeded(long startOffset) {
     if (_lastFetchedOffset < 0 || _lastFetchedOffset != startOffset - 1) {
       if (LOGGER.isDebugEnabled()) {
         LOGGER.debug("Seeking to offset: {}", startOffset);
       }
       _consumer.seek(_topicPartition, startOffset);
     }
+  }
 
-    ConsumerRecords<String, Bytes> consumerRecords = _consumer.poll(Duration.ofMillis(timeoutMs));
-    List<ConsumerRecord<String, Bytes>> records = consumerRecords.records(_topicPartition);
+  private KafkaMessageBatch processConsumerRecords(List<ConsumerRecord<String, Bytes>> records, long startOffset) {
     List<BytesStreamMessage> filteredRecords = new ArrayList<>(records.size());
     long firstOffset = -1;
+    long offsetOfNextBatch = startOffset;
+    StreamMessageMetadata lastMessageMetadata = null;
+
+    if (!records.isEmpty()) {
+      firstOffset = records.get(0).offset();
+      _lastFetchedOffset = records.get(records.size() - 1).offset();
+      offsetOfNextBatch = _lastFetchedOffset + 1;
+
+      for (ConsumerRecord<String, Bytes> record : records) {
+        StreamMessageMetadata messageMetadata = extractMessageMetadata(record);
+        Bytes message = record.value();
+        if (message != null) {
+          String key = record.key();
+          byte[] keyBytes = key != null ? key.getBytes(StandardCharsets.UTF_8) : null;
+          filteredRecords.add(new BytesStreamMessage(keyBytes, message.get(), messageMetadata));
+        } else if (LOGGER.isDebugEnabled()) {
+          LOGGER.debug("Tombstone message at offset: {}", record.offset());
+        }
+        lastMessageMetadata = messageMetadata;
+      }
+    }
+    return new KafkaMessageBatch(filteredRecords, records.size(), offsetOfNextBatch, firstOffset, lastMessageMetadata,
+        firstOffset > startOffset);
+  }
+
+  private StreamMessageMetadata extractMessageMetadata(ConsumerRecord<String, Bytes> record) {
+    long timestamp = record.timestamp();
+    long offset = record.offset();
+    StreamMessageMetadata.Builder builder = new StreamMessageMetadata.Builder().setRecordIngestionTimeMs(timestamp)
+        .setOffset(new LongMsgOffset(offset), new LongMsgOffset(offset + 1));
+    if (_config.isPopulateMetadata()) {
+      Headers headers = record.headers();
+      if (headers != null) {
+        GenericRow headerGenericRow = new GenericRow();
+        for (Header header : headers.toArray()) {
+          headerGenericRow.putValue(header.key(), header.value());
+        }
+        builder.setHeaders(headerGenericRow);
+      }
+      builder.setMetadata(Map.of(KafkaStreamMessageMetadata.RECORD_TIMESTAMP_KEY, String.valueOf(timestamp),
+          KafkaStreamMessageMetadata.METADATA_OFFSET_KEY, String.valueOf(offset)));
+    }
+    return builder.build();
+  }
+//Refactoring end
     long offsetOfNextBatch = startOffset;
     StreamMessageMetadata lastMessageMetadata = null;
     if (!records.isEmpty()) {

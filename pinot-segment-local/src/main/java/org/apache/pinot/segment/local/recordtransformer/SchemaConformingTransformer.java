@@ -368,62 +368,93 @@ public class SchemaConformingTransformer implements RecordTransformer {
    * @param outputRecord Returns the record after transformation
    */
   private void processField(Map<String, Object> schemaNode, String keyJsonPath, String key, Object value,
-      ExtraFieldsContainer extraFieldsContainer, GenericRow outputRecord) {
+          ExtraFieldsContainer extraFieldsContainer, GenericRow outputRecord) {
 
-    if (StreamDataDecoderImpl.isSpecialKeyType(key) || GenericRow.isSpecialKeyType(key)) {
-      outputRecord.putValue(key, value);
-      return;
-    }
+        if (isSpecialKey(key)) {
+          outputRecord.putValue(key, value);
+          return;
+        }
 
-    Set<String> fieldPathsToDrop = _transformerConfig.getFieldPathsToDrop();
-    if (null != fieldPathsToDrop && fieldPathsToDrop.contains(keyJsonPath)) {
-      return;
-    }
+        if (shouldDropField(keyJsonPath)) {
+          return;
+        }
 
-    String unindexableFieldSuffix = _transformerConfig.getUnindexableFieldSuffix();
-    if (null != unindexableFieldSuffix && key.endsWith(unindexableFieldSuffix)) {
-      extraFieldsContainer.addUnindexableEntry(key, value);
-      return;
-    }
+        if (isUnindexableField(key)) {
+          extraFieldsContainer.addUnindexableEntry(key, value);
+          return;
+        }
 
-    if (!schemaNode.containsKey(key)) {
-      addIndexableField(keyJsonPath, key, value, extraFieldsContainer);
-      return;
-    }
+        if (!schemaNode.containsKey(key)) {
+          addIndexableField(keyJsonPath, key, value, extraFieldsContainer);
+          return;
+        }
 
-    Map<String, Object> childSchemaNode = (Map<String, Object>) schemaNode.get(key);
-    boolean storeUnindexableExtras = _transformerConfig.getUnindexableExtrasField() != null;
-    if (null == childSchemaNode) {
-      if (!(value instanceof Map) || null == unindexableFieldSuffix) {
-        outputRecord.putValue(keyJsonPath, value);
-      } else {
-        // The field's value is a map which could contain a no-index field, so we need to keep traversing the map
-        ExtraFieldsContainer container = new ExtraFieldsContainer(storeUnindexableExtras);
-        addIndexableField(keyJsonPath, key, value, container);
-        Map<String, Object> indexableFields = container.getIndexableExtras();
-        outputRecord.putValue(keyJsonPath, indexableFields.get(key));
-        Map<String, Object> unindexableFields = container.getUnindexableExtras();
-        if (null != unindexableFields) {
-          extraFieldsContainer.addUnindexableEntry(key, unindexableFields.get(key));
+        processFieldAccordingToSchema(schemaNode, keyJsonPath, key, value, extraFieldsContainer, outputRecord);
+      }
+
+      private boolean isSpecialKey(String key) {
+        return StreamDataDecoderImpl.isSpecialKeyType(key) || GenericRow.isSpecialKeyType(key);
+      }
+
+      private boolean shouldDropField(String keyJsonPath) {
+        Set<String> fieldPathsToDrop = _transformerConfig.getFieldPathsToDrop();
+        return null != fieldPathsToDrop && fieldPathsToDrop.contains(keyJsonPath);
+      }
+
+      private boolean isUnindexableField(String key) {
+        String unindexableFieldSuffix = _transformerConfig.getUnindexableFieldSuffix();
+        return null != unindexableFieldSuffix && key.endsWith(unindexableFieldSuffix);
+      }
+
+      private void processFieldAccordingToSchema(Map<String, Object> schemaNode, String keyJsonPath, String key,
+          Object value, ExtraFieldsContainer extraFieldsContainer, GenericRow outputRecord) {
+        Map<String, Object> childSchemaNode = (Map<String, Object>) schemaNode.get(key);
+        boolean storeUnindexableExtras = _transformerConfig.getUnindexableExtrasField() != null;
+
+        if (null == childSchemaNode) {
+          processFieldWithNullSchemaNode(keyJsonPath, key, value, extraFieldsContainer, outputRecord);
+        } else {
+          processFieldWithNonNullSchemaNode(childSchemaNode, keyJsonPath, key, value, extraFieldsContainer,
+              outputRecord);
         }
       }
-    } else {
-      if (!(value instanceof Map)) {
-        _logger.debug("Record doesn't match schema: Schema node '{}' is a map but record value is a {}", keyJsonPath,
-            value.getClass().getSimpleName());
-        extraFieldsContainer.addIndexableEntry(key, value);
-      } else {
-        ExtraFieldsContainer childExtraFieldsContainer = new ExtraFieldsContainer(storeUnindexableExtras);
-        Map<String, Object> valueAsMap = (Map<String, Object>) value;
-        for (Map.Entry<String, Object> entry : valueAsMap.entrySet()) {
-          String childKey = entry.getKey();
-          processField(childSchemaNode, keyJsonPath + JsonUtils.KEY_SEPARATOR + childKey, childKey, entry.getValue(),
-              childExtraFieldsContainer, outputRecord);
+
+      private void processFieldWithNullSchemaNode(String keyJsonPath, String key, Object value,
+          ExtraFieldsContainer extraFieldsContainer, GenericRow outputRecord) {
+        String unindexableFieldSuffix = _transformerConfig.getUnindexableFieldSuffix();
+        if (!(value instanceof Map) || null == unindexableFieldSuffix) {
+          outputRecord.putValue(keyJsonPath, value);
+        } else {
+          ExtraFieldsContainer container = new ExtraFieldsContainer(_transformerConfig.getUnindexableExtrasField() != null);
+          addIndexableField(keyJsonPath, key, value, container);
+          outputRecord.putValue(keyJsonPath, container.getIndexableExtras().get(key));
+
+          Map<String, Object> unindexableFields = container.getUnindexableExtras();
+          if (null != unindexableFields) {
+            extraFieldsContainer.addUnindexableEntry(key, unindexableFields.get(key));
+          }
         }
-        extraFieldsContainer.addChild(key, childExtraFieldsContainer);
       }
-    }
-  }
+
+      private void processFieldWithNonNullSchemaNode(Map<String, Object> childSchemaNode, String keyJsonPath,
+          String key, Object value, ExtraFieldsContainer extraFieldsContainer, GenericRow outputRecord) {
+        if (!(value instanceof Map)) {
+          _logger.debug("Record doesn't match schema: Schema node '{}' is a map but record value is a {}",
+              keyJsonPath, value.getClass().getSimpleName());
+          extraFieldsContainer.addIndexableEntry(key, value);
+        } else {
+          ExtraFieldsContainer childExtraFieldsContainer =
+              new ExtraFieldsContainer(_transformerConfig.getUnindexableExtrasField() != null);
+          Map<String, Object> valueAsMap = (Map<String, Object>) value;
+          for (Map.Entry<String, Object> entry : valueAsMap.entrySet()) {
+            String childKey = entry.getKey();
+            processField(childSchemaNode, keyJsonPath + JsonUtils.KEY_SEPARATOR + childKey, childKey,
+                entry.getValue(), childExtraFieldsContainer, outputRecord);
+          }
+          extraFieldsContainer.addChild(key, childExtraFieldsContainer);
+        }
+      }
+      //Refactoring end
 
   /**
    * Adds an indexable field to the given {@code ExtrasFieldsContainer}.

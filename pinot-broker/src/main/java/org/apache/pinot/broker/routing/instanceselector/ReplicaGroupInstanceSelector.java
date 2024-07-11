@@ -139,42 +139,57 @@ public class ReplicaGroupInstanceSelector extends BaseInstanceSelector {
     // No need to adjust this map per total segment numbers, as optional segments should be empty most of the time.
     Map<String, String> optionalSegmentToInstanceMap = new HashMap<>();
     for (String segment : segments) {
-      // NOTE: candidates can be null when there is no enabled instances for the segment, or the instance selector has
-      // not been updated (we update all components for routing in sequence)
-      List<SegmentInstanceCandidate> candidates = segmentStates.getCandidates(segment);
-      if (candidates == null) {
-        continue;
-      }
-      // Round Robin.
-      int numCandidates = candidates.size();
-      int instanceIdx = requestId % numCandidates;
-      SegmentInstanceCandidate selectedInstance = candidates.get(instanceIdx);
-      // Adaptive Server Selection
-      // TODO: Support numReplicaGroupsToQuery with Adaptive Server Selection.
-      if (!serverRankList.isEmpty()) {
-        int minIdx = Integer.MAX_VALUE;
-        for (SegmentInstanceCandidate candidate : candidates) {
-          int idx = serverRankList.indexOf(candidate.getInstance());
-          if (idx == -1) {
-            // Let's use the round-robin approach until stats for all servers are populated.
-            selectedInstance = candidates.get(instanceIdx);
-            break;
-          }
-          if (idx < minIdx) {
-            minIdx = idx;
-            selectedInstance = candidate;
-          }
+      SegmentInstanceCandidate selectedInstance = selectInstanceForSegment(segment, requestId, segmentStates, serverRankList);
+      if (selectedInstance != null) {
+        if (selectedInstance.isOnline()) {
+          segmentToSelectedInstanceMap.put(segment, selectedInstance.getInstance());
+        } else {
+          optionalSegmentToInstanceMap.put(segment, selectedInstance.getInstance());
         }
-      }
-      // This can only be offline when it is a new segment. And such segment is marked as optional segment so that
-      // broker or server can skip it upon any issue to process it.
-      if (selectedInstance.isOnline()) {
-        segmentToSelectedInstanceMap.put(segment, selectedInstance.getInstance());
-      } else {
-        optionalSegmentToInstanceMap.put(segment, selectedInstance.getInstance());
       }
     }
     return Pair.of(segmentToSelectedInstanceMap, optionalSegmentToInstanceMap);
+  }
+
+  private SegmentInstanceCandidate selectInstanceForSegment(String segment, int requestId, SegmentStates segmentStates,
+      List<String> serverRankList) {
+    // NOTE: candidates can be null when there is no enabled instances for the segment, or the instance selector has
+    // not been updated (we update all components for routing in sequence)
+    List<SegmentInstanceCandidate> candidates = segmentStates.getCandidates(segment);
+    if (candidates == null) {
+      return null;
+    }
+    // Round Robin.
+    int numCandidates = candidates.size();
+    int instanceIdx = requestId % numCandidates;
+    SegmentInstanceCandidate selectedInstance = candidates.get(instanceIdx);
+    // Adaptive Server Selection
+    // TODO: Support numReplicaGroupsToQuery with Adaptive Server Selection.
+    if (!serverRankList.isEmpty()) {
+      selectedInstance = findBestRankedInstance(candidates, serverRankList, instanceIdx);
+    }
+    return selectedInstance;
+  }
+  
+  private SegmentInstanceCandidate findBestRankedInstance(List<SegmentInstanceCandidate> candidates,
+      List<String> serverRankList, int instanceIdx) {
+    int minIdx = Integer.MAX_VALUE;
+    SegmentInstanceCandidate selectedInstance = candidates.get(instanceIdx);
+    for (SegmentInstanceCandidate candidate : candidates) {
+      int idx = serverRankList.indexOf(candidate.getInstance());
+      if (idx == -1) {
+        // Let's use the round-robin approach until stats for all servers are populated.
+        break;
+      }
+      if (idx < minIdx) {
+        minIdx = idx;
+        selectedInstance = candidate;
+      }
+    }
+    return selectedInstance;
+  }
+
+//Refactoring end
   }
 
   private List<String> fetchCandidateServersForQuery(List<String> segments, SegmentStates segmentStates) {

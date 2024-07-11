@@ -72,38 +72,76 @@ public class DefaultLineageManager implements LineageManager {
     Iterator<LineageEntry> lineageEntryIterator = lineage.getLineageEntries().values().iterator();
     while (lineageEntryIterator.hasNext()) {
       LineageEntry lineageEntry = lineageEntryIterator.next();
-      if (lineageEntry.getState() == LineageEntryState.COMPLETED) {
-        Set<String> sourceSegments = new HashSet<>(lineageEntry.getSegmentsFrom());
-        sourceSegments.retainAll(segmentsForTable);
-        if (sourceSegments.isEmpty()) {
-          // If the lineage state is 'COMPLETED' and segmentFrom are removed, it is safe clean up the lineage entry
-          lineageEntryIterator.remove();
-        } else {
-          // If the lineage state is 'COMPLETED' and we already preserved the original segments for the required
-          // retention, it is safe to delete all segments from 'segmentsFrom'
-          if (shouldDeleteReplacedSegments(tableConfig, lineageEntry)) {
-            segmentsToDelete.addAll(sourceSegments);
-          }
-        }
-      } else if (lineageEntry.getState() == LineageEntryState.REVERTED || (
-          lineageEntry.getState() == LineageEntryState.IN_PROGRESS && lineageEntry.getTimestamp()
-              < System.currentTimeMillis() - LINEAGE_ENTRY_CLEANUP_RETENTION_IN_MILLIS)) {
-        // If the lineage state is 'IN_PROGRESS' or 'REVERTED', we need to clean up the zombie lineage
-        // entry and its segments
-        Set<String> destinationSegments = new HashSet<>(lineageEntry.getSegmentsTo());
-        destinationSegments.retainAll(segmentsForTable);
-        if (destinationSegments.isEmpty()) {
-          // If the lineage state is 'IN_PROGRESS or REVERTED' and source segments are already removed, it is safe
-          // to clean up the lineage entry. Deleting lineage will allow the task scheduler to re-schedule the source
-          // segments to be merged again.
-          lineageEntryIterator.remove();
-        } else {
-          // If the lineage state is 'IN_PROGRESS', it is safe to delete all segments from 'segmentsTo'
-          segmentsToDelete.addAll(destinationSegments);
-        }
+      processLineageEntry(tableConfig, segmentsForTable, segmentsToDelete, lineageEntryIterator, lineageEntry);
+    }
+  }
+  
+  private void processLineageEntry(TableConfig tableConfig, Set<String> segmentsForTable,
+      List<String> segmentsToDelete, Iterator<LineageEntry> lineageEntryIterator, LineageEntry lineageEntry) {
+    if (lineageEntry.getState() == LineageEntryState.COMPLETED) {
+      processCompletedLineageEntry(tableConfig, segmentsForTable, segmentsToDelete, lineageEntryIterator, lineageEntry);
+    } else if (lineageEntry.getState() == LineageEntryState.REVERTED || (
+        lineageEntry.getState() == LineageEntryState.IN_PROGRESS
+            && lineageEntry.getTimestamp() < System.currentTimeMillis() - LINEAGE_ENTRY_CLEANUP_RETENTION_IN_MILLIS)) {
+      // If the lineage state is 'IN_PROGRESS' or 'REVERTED', we need to clean up the zombie lineage
+      // entry and its segments
+      processInProgressOrRevertedLineageEntry(segmentsForTable, segmentsToDelete, lineageEntryIterator, lineageEntry);
+    }
+  }
+
+  private void processInProgressOrRevertedLineageEntry(Set<String> segmentsForTable,
+      List<String> segmentsToDelete, Iterator<LineageEntry> lineageEntryIterator, LineageEntry lineageEntry) {
+    Set<String> destinationSegments = new HashSet<>(lineageEntry.getSegmentsTo());
+    destinationSegments.retainAll(segmentsForTable);
+    if (destinationSegments.isEmpty()) {
+      // If the lineage state is 'IN_PROGRESS or REVERTED' and source segments are already removed, it is safe
+      // to clean up the lineage entry. Deleting lineage will allow the task scheduler to re-schedule the source
+      // segments to be merged again.
+      lineageEntryIterator.remove();
+    } else {
+      // If the lineage state is 'IN_PROGRESS', it is safe to delete all segments from 'segmentsTo'
+      segmentsToDelete.addAll(destinationSegments);
+    }
+  }
+
+  private void processCompletedLineageEntry(TableConfig tableConfig, Set<String> segmentsForTable,
+      List<String> segmentsToDelete, Iterator<LineageEntry> lineageEntryIterator, LineageEntry lineageEntry) {
+    Set<String> sourceSegments = new HashSet<>(lineageEntry.getSegmentsFrom());
+    sourceSegments.retainAll(segmentsForTable);
+    if (sourceSegments.isEmpty()) {
+      // If the lineage state is 'COMPLETED' and segmentFrom are removed, it is safe clean up the lineage entry
+      lineageEntryIterator.remove();
+    } else {
+      // If the lineage state is 'COMPLETED' and we already preserved the original segments for the required
+      // retention, it is safe to delete all segments from 'segmentsFrom'
+      if (shouldDeleteReplacedSegments(tableConfig, lineageEntry)) {
+        segmentsToDelete.addAll(sourceSegments);
       }
     }
   }
+
+  /**
+   * Helper function to decide whether we should delete segmentsFrom (replaced segments) given a lineage entry.
+   *
+   * The replaced segments are safe to delete if the following conditions are all satisfied
+   * 1) Table is "APPEND"
+   * 2) It has been more than 24 hours since the lineage entry became "COMPLETED" state.
+   *
+   * @param tableConfig a table config
+   * @param lineageEntry lineage entry
+   * @return True if we can safely delete the replaced segments. False otherwise.
+   */
+  private boolean shouldDeleteReplacedSegments(TableConfig tableConfig, LineageEntry lineageEntry) {
+    // TODO: Currently, we preserve the replaced segments for 1 day for REFRESH tables only. Once we support
+    // data rollback for APPEND tables, we should remove this check.
+    String batchSegmentIngestionType = IngestionConfigUtils.getBatchSegmentIngestionType(tableConfig);
+    if (!batchSegmentIngestionType.equalsIgnoreCase("REFRESH")
+        || lineageEntry.getTimestamp() < System.currentTimeMillis() - REPLACED_SEGMENTS_RETENTION_IN_MILLIS) {
+      return true;
+    }
+    return false;
+  }
+//Refactoring end
 
 
   /**

@@ -294,94 +294,116 @@ public class PerQueryCPUMemAccountantFactory implements ThreadAccountantFactory 
      * @return aggregated stats of active queries if triggered
      */
     public Map<String, AggregatedStats> aggregate(boolean isTriggered) {
-      HashMap<String, AggregatedStats> ret = null;
+    HashMap<String, AggregatedStats> ret = null;
+    if (isTriggered) {
+      ret = new HashMap<>();
+    }
+
+    for (Map.Entry<Thread, CPUMemThreadLevelAccountingObjects.ThreadEntry> entry : _threadEntriesMap.entrySet()) {
+      aggregateThreadEntry(entry, isTriggered, ret);
+    }
+
+    if (isTriggered) {
+      accumulateFinishedTaskStats(ret);
+    }
+    return ret;
+  }
+
+  private void aggregateThreadEntry(
+      Map.Entry<Thread, CPUMemThreadLevelAccountingObjects.ThreadEntry> entry, boolean isTriggered,
+      HashMap<String, AggregatedStats> ret) {
+    CPUMemThreadLevelAccountingObjects.ThreadEntry threadEntry = entry.getValue();
+    long currentCPUSample = _isThreadCPUSamplingEnabled
+        ? threadEntry._currentThreadCPUTimeSampleMS : 0;
+    long currentMemSample = _isThreadMemorySamplingEnabled
+        ? threadEntry._currentThreadMemoryAllocationSampleBytes : 0;
+
+    CPUMemThreadLevelAccountingObjects.TaskEntry currentTaskStatus = threadEntry.getCurrentThreadTaskStatus();
+    Thread thread = entry.getKey();
+    LOGGER.trace("tid: {}, task: {}", thread.getId(), currentTaskStatus);
+
+    CPUMemThreadLevelAccountingObjects.TaskEntry lastQueryTask = threadEntry._previousThreadTaskStatus;
+
+    accumulateFinishedTaskStats(threadEntry, currentTaskStatus, lastQueryTask);
+
+    recordCurrentUsageForFutureAccumulation(threadEntry, currentCPUSample, currentMemSample);
+
+    aggregateCurrentTaskStats(isTriggered, ret, threadEntry, currentTaskStatus, currentCPUSample, currentMemSample);
+
+    removeThreadIfTerminated(thread);
+  }
+
+  private void removeThreadIfTerminated(Thread thread) {
+    if (!thread.isAlive()) {
+      _threadEntriesMap.remove(thread);
+      LOGGER.info("Removing thread from _threadLocalEntry: {}", thread.getName());
+    }
+  }
+
+  private void aggregateCurrentTaskStats(boolean isTriggered, HashMap<String, AggregatedStats> ret,
+      CPUMemThreadLevelAccountingObjects.ThreadEntry threadEntry,
+      CPUMemThreadLevelAccountingObjects.TaskEntry currentTaskStatus, long currentCPUSample,
+      long currentMemSample) {
+    if (currentTaskStatus != null) {
+      String queryId = currentTaskStatus.getQueryId();
+      _inactiveQuery.remove(queryId);
       if (isTriggered) {
-        ret = new HashMap<>();
+        Thread anchorThread = currentTaskStatus.getAnchorThread();
+        boolean isAnchorThread = currentTaskStatus.isAnchorThread();
+        ret.compute(queryId, (k, v) -> v == null
+            ? new AggregatedStats(currentCPUSample, currentMemSample, anchorThread,
+            isAnchorThread, threadEntry._errorStatus, queryId)
+            : v.merge(currentCPUSample, currentMemSample, isAnchorThread, threadEntry._errorStatus));
       }
+    }
+  }
 
-      // for each {pqr, pqw}
-      for (Map.Entry<Thread, CPUMemThreadLevelAccountingObjects.ThreadEntry> entry : _threadEntriesMap.entrySet()) {
-        // sample current usage
-        CPUMemThreadLevelAccountingObjects.ThreadEntry threadEntry = entry.getValue();
-        long currentCPUSample = _isThreadCPUSamplingEnabled
-            ? threadEntry._currentThreadCPUTimeSampleMS : 0;
-        long currentMemSample = _isThreadMemorySamplingEnabled
-            ? threadEntry._currentThreadMemoryAllocationSampleBytes : 0;
-        // sample current running task status
-        CPUMemThreadLevelAccountingObjects.TaskEntry currentTaskStatus = threadEntry.getCurrentThreadTaskStatus();
-        Thread thread = entry.getKey();
-        LOGGER.trace("tid: {}, task: {}", thread.getId(), currentTaskStatus);
+  private void recordCurrentUsageForFutureAccumulation(CPUMemThreadLevelAccountingObjects.ThreadEntry threadEntry,
+      long currentCPUSample, long currentMemSample) {
+    if (_isThreadCPUSamplingEnabled) {
+      threadEntry._previousThreadCPUTimeSampleMS = currentCPUSample;
+    }
+    if (_isThreadMemorySamplingEnabled) {
+      threadEntry._previousThreadMemoryAllocationSampleBytes = currentMemSample;
+    }
+  }
 
-        // get last task on the thread
-        CPUMemThreadLevelAccountingObjects.TaskEntry lastQueryTask = threadEntry._previousThreadTaskStatus;
-
-        // accumulate recorded previous stat to it's _finishedTaskStatAggregator
-        // if the last task on the same thread has finished
-        if (!(currentTaskStatus == lastQueryTask)) {
-          // set previous value to current task stats
-          threadEntry._previousThreadTaskStatus = currentTaskStatus;
-          if (lastQueryTask != null) {
-            String lastQueryId = lastQueryTask.getQueryId();
-            if (_isThreadCPUSamplingEnabled) {
-              long lastSample = threadEntry._previousThreadCPUTimeSampleMS;
-              _finishedTaskCPUStatsAggregator.merge(lastQueryId, lastSample, Long::sum);
-            }
-            if (_isThreadMemorySamplingEnabled) {
-              long lastSample = threadEntry._previousThreadMemoryAllocationSampleBytes;
-              _finishedTaskMemStatsAggregator.merge(lastQueryId, lastSample, Long::sum);
-            }
-          }
-        }
-
-        // record current usage values for future accumulation if this task is done
+  private void accumulateFinishedTaskStats(CPUMemThreadLevelAccountingObjects.ThreadEntry threadEntry,
+      CPUMemThreadLevelAccountingObjects.TaskEntry currentTaskStatus,
+      CPUMemThreadLevelAccountingObjects.TaskEntry lastQueryTask) {
+    if (!(currentTaskStatus == lastQueryTask)) {
+      threadEntry._previousThreadTaskStatus = currentTaskStatus;
+      if (lastQueryTask != null) {
+        String lastQueryId = lastQueryTask.getQueryId();
         if (_isThreadCPUSamplingEnabled) {
-          threadEntry._previousThreadCPUTimeSampleMS = currentCPUSample;
+          long lastSample = threadEntry._previousThreadCPUTimeSampleMS;
+          _finishedTaskCPUStatsAggregator.merge(lastQueryId, lastSample, Long::sum);
         }
         if (_isThreadMemorySamplingEnabled) {
-          threadEntry._previousThreadMemoryAllocationSampleBytes = currentMemSample;
-        }
-
-        // if current thread is not idle
-        if (currentTaskStatus != null) {
-          // extract query id from queryTask string
-          String queryId = currentTaskStatus.getQueryId();
-          // update inactive queries for cleanInactive()
-          _inactiveQuery.remove(queryId);
-          // if triggered, accumulate active query task stats
-          if (isTriggered) {
-            Thread anchorThread = currentTaskStatus.getAnchorThread();
-            boolean isAnchorThread = currentTaskStatus.isAnchorThread();
-            ret.compute(queryId, (k, v) -> v == null
-                ? new AggregatedStats(currentCPUSample, currentMemSample, anchorThread,
-                isAnchorThread, threadEntry._errorStatus, queryId)
-                : v.merge(currentCPUSample, currentMemSample, isAnchorThread, threadEntry._errorStatus));
-          }
-        }
-
-        if (!thread.isAlive()) {
-          _threadEntriesMap.remove(thread);
-          LOGGER.info("Removing thread from _threadLocalEntry: {}", thread.getName());
+          long lastSample = threadEntry._previousThreadMemoryAllocationSampleBytes;
+          _finishedTaskMemStatsAggregator.merge(lastQueryId, lastSample, Long::sum);
         }
       }
-
-      // if triggered, accumulate stats of finished tasks of each active query
-      if (isTriggered) {
-        for (Map.Entry<String, AggregatedStats> queryIdResult : ret.entrySet()) {
-          String activeQueryId = queryIdResult.getKey();
-          long accumulatedCPUValue = _isThreadCPUSamplingEnabled
-              ? _finishedTaskCPUStatsAggregator.getOrDefault(activeQueryId, 0L) : 0;
-          long concurrentCPUValue = _isThreadCPUSamplingEnabled
-              ? _concurrentTaskCPUStatsAggregator.getOrDefault(activeQueryId, 0L) : 0;
-          long accumulatedMemValue = _isThreadMemorySamplingEnabled
-              ? _finishedTaskMemStatsAggregator.getOrDefault(activeQueryId, 0L) : 0;
-          long concurrentMemValue = _isThreadMemorySamplingEnabled
-              ? _concurrentTaskMemStatsAggregator.getOrDefault(activeQueryId, 0L) : 0;
-          queryIdResult.getValue().merge(accumulatedCPUValue + concurrentCPUValue,
-              accumulatedMemValue + concurrentMemValue, false, null);
-        }
-      }
-      return ret;
     }
+  }
+
+  private void accumulateFinishedTaskStats(HashMap<String, AggregatedStats> ret) {
+    for (Map.Entry<String, AggregatedStats> queryIdResult : ret.entrySet()) {
+      String activeQueryId = queryIdResult.getKey();
+      long accumulatedCPUValue = _isThreadCPUSamplingEnabled
+          ? _finishedTaskCPUStatsAggregator.getOrDefault(activeQueryId, 0L) : 0;
+      long concurrentCPUValue = _isThreadCPUSamplingEnabled
+          ? _concurrentTaskCPUStatsAggregator.getOrDefault(activeQueryId, 0L) : 0;
+      long accumulatedMemValue = _isThreadMemorySamplingEnabled
+          ? _finishedTaskMemStatsAggregator.getOrDefault(activeQueryId, 0L) : 0;
+      long concurrentMemValue = _isThreadMemorySamplingEnabled
+          ? _concurrentTaskMemStatsAggregator.getOrDefault(activeQueryId, 0L) : 0;
+      queryIdResult.getValue().merge(accumulatedCPUValue + concurrentCPUValue,
+          accumulatedMemValue + concurrentMemValue, false, null);
+    }
+  }
+
+//Refactoring end
 
     public void postAggregation(Map<String, AggregatedStats> aggregatedUsagePerActiveQuery) {
     }

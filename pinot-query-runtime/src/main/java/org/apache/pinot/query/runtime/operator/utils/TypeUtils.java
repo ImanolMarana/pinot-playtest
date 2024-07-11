@@ -36,65 +36,81 @@ public class TypeUtils {
    * TODO: Revisit to see if we should use original type instead of stored type
    */
   public static Object convert(Object value, ColumnDataType storedType) {
-    switch (storedType) {
-      case INT:
-        return ((Number) value).intValue();
-      case LONG:
-        return ((Number) value).longValue();
-      case FLOAT:
-        return ((Number) value).floatValue();
-      case DOUBLE:
-        return ((Number) value).doubleValue();
-      // For AggregationFunctions that return serialized custom object, e.g. DistinctCountRawHLLAggregationFunction
-      case STRING:
-        return value.toString();
-      case INT_ARRAY:
-        if (value instanceof IntArrayList) {
-          // For ArrayAggregationFunction
-          return ((IntArrayList) value).elements();
-        } else {
-          return value;
-        }
-      case LONG_ARRAY:
-        if (value instanceof LongArrayList) {
-          // For FunnelCountAggregationFunction and ArrayAggregationFunction
-          return ((LongArrayList) value).elements();
-        } else {
-          return value;
-        }
-      case FLOAT_ARRAY:
-        if (value instanceof FloatArrayList) {
-          // For ArrayAggregationFunction
-          return ((FloatArrayList) value).elements();
-        } else if (value instanceof double[]) {
-          // This is due to for parsing array literal value like [0.1, 0.2, 0.3].
-          // The parsed value is stored as double[] in java, however the calcite type is FLOAT_ARRAY.
-          float[] floatArray = new float[((double[]) value).length];
-          for (int i = 0; i < floatArray.length; i++) {
-            floatArray[i] = (float) ((double[]) value)[i];
-          }
-          return floatArray;
-        } else {
-          return value;
-        }
-      case DOUBLE_ARRAY:
-        if (value instanceof DoubleArrayList) {
-          // For HistogramAggregationFunction and ArrayAggregationFunction
-          return ((DoubleArrayList) value).elements();
-        } else {
-          return value;
-        }
-      case STRING_ARRAY:
-        if (value instanceof ObjectArrayList) {
-          // For ArrayAggregationFunction
-          return ((ObjectArrayList<String>) value).toArray(new String[0]);
-        } else {
-          return value;
-        }
-      // TODO: Add more conversions
-      default:
-        return value;
+  switch (storedType) {
+    case INT:
+      return ((Number) value).intValue();
+    case LONG:
+      return ((Number) value).longValue();
+    case FLOAT:
+      return ((Number) value).floatValue();
+    case DOUBLE:
+      return ((Number) value).doubleValue();
+    case STRING:
+      return value.toString();
+    case INT_ARRAY:
+      return convertIntArray(value);
+    case LONG_ARRAY:
+      return convertLongArray(value);
+    case FLOAT_ARRAY:
+      return convertFloatArray(value);
+    case DOUBLE_ARRAY:
+      return convertDoubleArray(value);
+    case STRING_ARRAY:
+      return convertStringArray(value);
+    // TODO: Add more conversions
+    default:
+      return value;
+  }
+}
+
+private static Object convertIntArray(Object value) {
+  if (value instanceof IntArrayList) {
+    return ((IntArrayList) value).elements();
+  } else {
+    return value;
+  }
+}
+
+private static Object convertLongArray(Object value) {
+  if (value instanceof LongArrayList) {
+    return ((LongArrayList) value).elements();
+  } else {
+    return value;
+  }
+}
+
+private static Object convertFloatArray(Object value) {
+  if (value instanceof FloatArrayList) {
+    return ((FloatArrayList) value).elements();
+  } else if (value instanceof double[]) {
+    // This is due to for parsing array literal value like [0.1, 0.2, 0.3].
+    // The parsed value is stored as double[] in java, however the calcite type is FLOAT_ARRAY.
+    float[] floatArray = new float[((double[]) value).length];
+    for (int i = 0; i < floatArray.length; i++) {
+      floatArray[i] = (float) ((double[]) value)[i];
     }
+    return floatArray;
+  } else {
+    return value;
+  }
+}
+
+private static Object convertDoubleArray(Object value) {
+  if (value instanceof DoubleArrayList) {
+    return ((DoubleArrayList) value).elements();
+  } else {
+    return value;
+  }
+}
+
+private static Object convertStringArray(Object value) {
+  if (value instanceof ObjectArrayList) {
+    return ((ObjectArrayList<String>) value).toArray(new String[0]);
+  } else {
+    return value;
+  }
+}
+//Refactoring end
   }
 
   /**

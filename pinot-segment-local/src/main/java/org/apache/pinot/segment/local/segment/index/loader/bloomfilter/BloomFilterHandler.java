@@ -137,112 +137,128 @@ public class BloomFilterHandler extends BaseIndexHandler {
         .withIndexDir(indexDir)
         .withColumnMetadata(columnMetadata)
         .build();
+
     try (BloomFilterCreator bloomFilterCreator = StandardIndexes.bloomFilter()
         .createIndexCreator(context, bloomFilterConfig);
         ForwardIndexReader forwardIndexReader = ForwardIndexType.read(segmentWriter, columnMetadata);
         ForwardIndexReaderContext readerContext = forwardIndexReader.createContext()) {
+
       if (columnMetadata.isSingleValue()) {
-        // SV
-        switch (columnMetadata.getDataType()) {
-          case INT:
-            for (int i = 0; i < numDocs; i++) {
-              bloomFilterCreator.add(Integer.toString(forwardIndexReader.getInt(i, readerContext)));
-            }
-            break;
-          case LONG:
-            for (int i = 0; i < numDocs; i++) {
-              bloomFilterCreator.add(Long.toString(forwardIndexReader.getLong(i, readerContext)));
-            }
-            break;
-          case FLOAT:
-            for (int i = 0; i < numDocs; i++) {
-              bloomFilterCreator.add(Float.toString(forwardIndexReader.getFloat(i, readerContext)));
-            }
-            break;
-          case DOUBLE:
-            for (int i = 0; i < numDocs; i++) {
-              bloomFilterCreator.add(Double.toString(forwardIndexReader.getDouble(i, readerContext)));
-            }
-            break;
-          case STRING:
-            for (int i = 0; i < numDocs; i++) {
-              bloomFilterCreator.add(forwardIndexReader.getString(i, readerContext));
-            }
-            break;
-          case BYTES:
-            for (int i = 0; i < numDocs; i++) {
-              bloomFilterCreator.add(BytesUtils.toHexString(forwardIndexReader.getBytes(i, readerContext)));
-            }
-            break;
-          default:
-            throw new IllegalStateException("Unsupported data type: " + columnMetadata.getDataType() + " for column: "
-                + columnMetadata.getColumnName());
-        }
-        bloomFilterCreator.seal();
+        createAndSealBloomFilterForSVNonDictionaryColumn(columnMetadata, numDocs, bloomFilterCreator,
+            forwardIndexReader, readerContext);
       } else {
-        // MV
-        switch (columnMetadata.getDataType()) {
-          case INT:
-            for (int i = 0; i < numDocs; i++) {
-              int[] buffer = new int[columnMetadata.getMaxNumberOfMultiValues()];
-              int length = forwardIndexReader.getIntMV(i, buffer, readerContext);
-              for (int j = 0; j < length; j++) {
-                bloomFilterCreator.add(Integer.toString(buffer[j]));
-              }
-            }
-            break;
-          case LONG:
-            for (int i = 0; i < numDocs; i++) {
-              long[] buffer = new long[columnMetadata.getMaxNumberOfMultiValues()];
-              int length = forwardIndexReader.getLongMV(i, buffer, readerContext);
-              for (int j = 0; j < length; j++) {
-                bloomFilterCreator.add(Long.toString(buffer[j]));
-              }
-            }
-            break;
-          case FLOAT:
-            for (int i = 0; i < numDocs; i++) {
-              float[] buffer = new float[columnMetadata.getMaxNumberOfMultiValues()];
-              int length = forwardIndexReader.getFloatMV(i, buffer, readerContext);
-              for (int j = 0; j < length; j++) {
-                bloomFilterCreator.add(Float.toString(buffer[j]));
-              }
-            }
-            break;
-          case DOUBLE:
-            for (int i = 0; i < numDocs; i++) {
-              double[] buffer = new double[columnMetadata.getMaxNumberOfMultiValues()];
-              int length = forwardIndexReader.getDoubleMV(i, buffer, readerContext);
-              for (int j = 0; j < length; j++) {
-                bloomFilterCreator.add(Double.toString(buffer[j]));
-              }
-            }
-            break;
-          case STRING:
-            for (int i = 0; i < numDocs; i++) {
-              String[] buffer = new String[columnMetadata.getMaxNumberOfMultiValues()];
-              int length = forwardIndexReader.getStringMV(i, buffer, readerContext);
-              for (int j = 0; j < length; j++) {
-                bloomFilterCreator.add(buffer[j]);
-              }
-            }
-            break;
-          case BYTES:
-            for (int i = 0; i < numDocs; i++) {
-              byte[][] buffer = new byte[columnMetadata.getMaxNumberOfMultiValues()][];
-              int length = forwardIndexReader.getBytesMV(i, buffer, readerContext);
-              for (int j = 0; j < length; j++) {
-                bloomFilterCreator.add(BytesUtils.toHexString(buffer[j]));
-              }
-            }
-            break;
-          default:
-            throw new IllegalStateException("Unsupported data type: " + columnMetadata.getDataType() + " for column: "
-                + columnMetadata.getColumnName());
-        }
-        bloomFilterCreator.seal();
+        createAndSealBloomFilterForMVNonDictionaryColumn(columnMetadata, numDocs, bloomFilterCreator,
+            forwardIndexReader, readerContext);
       }
     }
+  }
+
+  private void createAndSealBloomFilterForSVNonDictionaryColumn(ColumnMetadata columnMetadata, int numDocs,
+      BloomFilterCreator bloomFilterCreator, ForwardIndexReader forwardIndexReader,
+      ForwardIndexReaderContext readerContext) throws Exception {
+    switch (columnMetadata.getDataType()) {
+      case INT:
+        for (int i = 0; i < numDocs; i++) {
+          bloomFilterCreator.add(Integer.toString(forwardIndexReader.getInt(i, readerContext)));
+        }
+        break;
+      case LONG:
+        for (int i = 0; i < numDocs; i++) {
+          bloomFilterCreator.add(Long.toString(forwardIndexReader.getLong(i, readerContext)));
+        }
+        break;
+      case FLOAT:
+        for (int i = 0; i < numDocs; i++) {
+          bloomFilterCreator.add(Float.toString(forwardIndexReader.getFloat(i, readerContext)));
+        }
+        break;
+      case DOUBLE:
+        for (int i = 0; i < numDocs; i++) {
+          bloomFilterCreator.add(Double.toString(forwardIndexReader.getDouble(i, readerContext)));
+        }
+        break;
+      case STRING:
+        for (int i = 0; i < numDocs; i++) {
+          bloomFilterCreator.add(forwardIndexReader.getString(i, readerContext));
+        }
+        break;
+      case BYTES:
+        for (int i = 0; i < numDocs; i++) {
+          bloomFilterCreator.add(BytesUtils.toHexString(forwardIndexReader.getBytes(i, readerContext)));
+        }
+        break;
+      default:
+        throw new IllegalStateException("Unsupported data type: " + columnMetadata.getDataType() + " for column: "
+            + columnMetadata.getColumnName());
+    }
+    bloomFilterCreator.seal();
+  }
+
+  private void createAndSealBloomFilterForMVNonDictionaryColumn(ColumnMetadata columnMetadata, int numDocs,
+      BloomFilterCreator bloomFilterCreator, ForwardIndexReader forwardIndexReader,
+      ForwardIndexReaderContext readerContext) throws Exception {
+    switch (columnMetadata.getDataType()) {
+      case INT:
+        for (int i = 0; i < numDocs; i++) {
+          int[] buffer = new int[columnMetadata.getMaxNumberOfMultiValues()];
+          int length = forwardIndexReader.getIntMV(i, buffer, readerContext);
+          for (int j = 0; j < length; j++) {
+            bloomFilterCreator.add(Integer.toString(buffer[j]));
+          }
+        }
+        break;
+      case LONG:
+        for (int i = 0; i < numDocs; i++) {
+          long[] buffer = new long[columnMetadata.getMaxNumberOfMultiValues()];
+          int length = forwardIndexReader.getLongMV(i, buffer, readerContext);
+          for (int j = 0; j < length; j++) {
+            bloomFilterCreator.add(Long.toString(buffer[j]));
+          }
+        }
+        break;
+      case FLOAT:
+        for (int i = 0; i < numDocs; i++) {
+          float[] buffer = new float[columnMetadata.getMaxNumberOfMultiValues()];
+          int length = forwardIndexReader.getFloatMV(i, buffer, readerContext);
+          for (int j = 0; j < length; j++) {
+            bloomFilterCreator.add(Float.toString(buffer[j]));
+          }
+        }
+        break;
+      case DOUBLE:
+        for (int i = 0; i < numDocs; i++) {
+          double[] buffer = new double[columnMetadata.getMaxNumberOfMultiValues()];
+          int length = forwardIndexReader.getDoubleMV(i, buffer, readerContext);
+          for (int j = 0; j < length; j++) {
+            bloomFilterCreator.add(Double.toString(buffer[j]));
+          }
+        }
+        break;
+      case STRING:
+        for (int i = 0; i < numDocs; i++) {
+          String[] buffer = new String[columnMetadata.getMaxNumberOfMultiValues()];
+          int length = forwardIndexReader.getStringMV(i, buffer, readerContext);
+          for (int j = 0; j < length; j++) {
+            bloomFilterCreator.add(buffer[j]);
+          }
+        }
+        break;
+      case BYTES:
+        for (int i = 0; i < numDocs; i++) {
+          byte[][] buffer = new byte[columnMetadata.getMaxNumberOfMultiValues()][];
+          int length = forwardIndexReader.getBytesMV(i, buffer, readerContext);
+          for (int j = 0; j < length; j++) {
+            bloomFilterCreator.add(BytesUtils.toHexString(buffer[j]));
+          }
+        }
+        break;
+      default:
+        throw new IllegalStateException("Unsupported data type: " + columnMetadata.getDataType() + " for column: "
+            + columnMetadata.getColumnName());
+    }
+    bloomFilterCreator.seal();
+  }
+//Refactoring end
   }
 
   private void createBloomFilterForColumn(SegmentDirectory.Writer segmentWriter, ColumnMetadata columnMetadata)

@@ -43,43 +43,54 @@ public class DictionaryBasedMultiColumnDistinctOnlyExecutor extends BaseDictiona
   @Override
   public boolean process(ValueBlock valueBlock) {
     int numDocs = valueBlock.getNumDocs();
-    int numExpressions = _expressions.size();
     if (!_hasMVExpression) {
-      int[][] dictIdsArray = new int[numDocs][numExpressions];
-      for (int i = 0; i < numExpressions; i++) {
-        BlockValSet blockValueSet = valueBlock.getBlockValueSet(_expressions.get(i));
-        int[] dictIdsForExpression = blockValueSet.getDictionaryIdsSV();
-        for (int j = 0; j < numDocs; j++) {
-          dictIdsArray[j][i] = dictIdsForExpression[j];
-        }
+      return processSingleValueExpressions(valueBlock, numDocs);
+    } else {
+      return processMultiValueExpressions(valueBlock, numDocs);
+    }
+  }
+  
+  private boolean processSingleValueExpressions(ValueBlock valueBlock, int numDocs) {
+    int numExpressions = _expressions.size();
+    int[][] dictIdsArray = new int[numDocs][numExpressions];
+    for (int i = 0; i < numExpressions; i++) {
+      BlockValSet blockValueSet = valueBlock.getBlockValueSet(_expressions.get(i));
+      int[] dictIdsForExpression = blockValueSet.getDictionaryIdsSV();
+      for (int j = 0; j < numDocs; j++) {
+        dictIdsArray[j][i] = dictIdsForExpression[j];
       }
-      for (int i = 0; i < numDocs; i++) {
-        _dictIdsSet.add(new DictIds(dictIdsArray[i]));
+    }
+    for (int i = 0; i < numDocs; i++) {
+      _dictIdsSet.add(new DictIds(dictIdsArray[i]));
+      if (_dictIdsSet.size() >= _limit) {
+        return true;
+      }
+    }
+    return false;
+  }
+  
+  private boolean processMultiValueExpressions(ValueBlock valueBlock, int numDocs) {
+    int numExpressions = _expressions.size();
+    int[][] svDictIds = new int[numExpressions][];
+    int[][][] mvDictIds = new int[numExpressions][][];
+    for (int i = 0; i < numExpressions; i++) {
+      BlockValSet blockValueSet = valueBlock.getBlockValueSet(_expressions.get(i));
+      if (blockValueSet.isSingleValue()) {
+        svDictIds[i] = blockValueSet.getDictionaryIdsSV();
+      } else {
+        mvDictIds[i] = blockValueSet.getDictionaryIdsMV();
+      }
+    }
+    for (int i = 0; i < numDocs; i++) {
+      int[][] dictIdsArray = DistinctExecutorUtils.getDictIds(svDictIds, mvDictIds, i);
+      for (int[] dictIds : dictIdsArray) {
+        _dictIdsSet.add(new DictIds(dictIds));
         if (_dictIdsSet.size() >= _limit) {
           return true;
-        }
-      }
-    } else {
-      int[][] svDictIds = new int[numExpressions][];
-      int[][][] mvDictIds = new int[numExpressions][][];
-      for (int i = 0; i < numExpressions; i++) {
-        BlockValSet blockValueSet = valueBlock.getBlockValueSet(_expressions.get(i));
-        if (blockValueSet.isSingleValue()) {
-          svDictIds[i] = blockValueSet.getDictionaryIdsSV();
-        } else {
-          mvDictIds[i] = blockValueSet.getDictionaryIdsMV();
-        }
-      }
-      for (int i = 0; i < numDocs; i++) {
-        int[][] dictIdsArray = DistinctExecutorUtils.getDictIds(svDictIds, mvDictIds, i);
-        for (int[] dictIds : dictIdsArray) {
-          _dictIdsSet.add(new DictIds(dictIds));
-          if (_dictIdsSet.size() >= _limit) {
-            return true;
-          }
         }
       }
     }
     return false;
   }
-}
+
+//Refactoring end

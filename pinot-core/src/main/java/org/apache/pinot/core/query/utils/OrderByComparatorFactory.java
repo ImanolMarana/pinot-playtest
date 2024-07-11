@@ -61,49 +61,82 @@ public class OrderByComparatorFactory {
 
   @SuppressWarnings({"rawtypes", "unchecked"})
   public static Comparator<Object[]> getComparator(List<OrderByExpressionContext> orderByExpressions,
-      boolean nullHandlingEnabled, int from, int to) {
-    assert 0 <= from && from < to && to <= orderByExpressions.size();
-
-    // Use multiplier -1 or 1 to control ascending/descending order
-    int[] multipliers = new int[to];
-    // Use nulls multiplier -1 or 1 to control nulls last/first order
-    int[] nullsMultipliers = new int[to];
-    for (int i = from; i < to; i++) {
-      multipliers[i] = orderByExpressions.get(i).isAsc() ? 1 : -1;
-      nullsMultipliers[i] = orderByExpressions.get(i).isNullsLast() ? 1 : -1;
+        boolean nullHandlingEnabled, int from, int to) {
+      assert 0 <= from && from < to && to <= orderByExpressions.size();
+  
+      // Use multiplier -1 or 1 to control ascending/descending order
+      int[] multipliers = new int[to];
+      // Use nulls multiplier -1 or 1 to control nulls last/first order
+      int[] nullsMultipliers = new int[to];
+      for (int i = from; i < to; i++) {
+        multipliers[i] = orderByExpressions.get(i).isAsc() ? 1 : -1;
+        nullsMultipliers[i] = orderByExpressions.get(i).isNullsLast() ? 1 : -1;
+      }
+  
+      if (nullHandlingEnabled) {
+        return new NullAwareComparator(multipliers, nullsMultipliers, from, to);
+      } else {
+        return new DefaultComparator(multipliers, from, to);
+      }
     }
-
-    if (nullHandlingEnabled) {
-      return (Object[] o1, Object[] o2) -> {
-        for (int i = from; i < to; i++) {
+  
+    private static class NullAwareComparator implements Comparator<Object[]> {
+      private final int[] _multipliers;
+      private final int[] _nullsMultipliers;
+      private final int _from;
+      private final int _to;
+  
+      public NullAwareComparator(int[] multipliers, int[] nullsMultipliers, int from, int to) {
+        _multipliers = multipliers;
+        _nullsMultipliers = nullsMultipliers;
+        _from = from;
+        _to = to;
+      }
+  
+      @Override
+      public int compare(Object[] o1, Object[] o2) {
+        for (int i = _from; i < _to; i++) {
           Comparable v1 = (Comparable) o1[i];
           Comparable v2 = (Comparable) o2[i];
           if (v1 == null && v2 == null) {
             continue;
           } else if (v1 == null) {
-            return nullsMultipliers[i];
+            return _nullsMultipliers[i];
           } else if (v2 == null) {
-            return -nullsMultipliers[i];
+            return -_nullsMultipliers[i];
           }
           int result = v1.compareTo(v2);
           if (result != 0) {
-            return result * multipliers[i];
+            return result * _multipliers[i];
           }
         }
         return 0;
-      };
-    } else {
-      return (Object[] o1, Object[] o2) -> {
-        for (int i = from; i < to; i++) {
+      }
+    }
+  
+    private static class DefaultComparator implements Comparator<Object[]> {
+      private final int[] _multipliers;
+      private final int _from;
+      private final int _to;
+  
+      public DefaultComparator(int[] multipliers, int from, int to) {
+        _multipliers = multipliers;
+        _from = from;
+        _to = to;
+      }
+  
+      @Override
+      public int compare(Object[] o1, Object[] o2) {
+        for (int i = _from; i < _to; i++) {
           Comparable v1 = (Comparable) o1[i];
           Comparable v2 = (Comparable) o2[i];
           int result = v1.compareTo(v2);
           if (result != 0) {
-            return result * multipliers[i];
+            return result * _multipliers[i];
           }
         }
         return 0;
-      };
+      }
     }
-  }
+//Refactoring end
 }

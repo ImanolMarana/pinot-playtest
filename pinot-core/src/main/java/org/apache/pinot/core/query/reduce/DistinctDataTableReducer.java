@@ -87,11 +87,50 @@ public class DistinctDataTableReducer implements DataTableReducer {
   }
 
   private void addToNonOrderByDistinctTable(DataSchema dataSchema, Map<ServerRoutingInstance, DataTable> dataTableMap,
-      DistinctTable distinctTable) {
-    for (DataTable dataTable : dataTableMap.values()) {
-      Tracing.ThreadAccountantOps.sampleAndCheckInterruption();
-      int numColumns = dataSchema.size();
-      int numRows = dataTable.getNumberOfRows();
+    DistinctTable distinctTable) {
+  for (DataTable dataTable : dataTableMap.values()) {
+    Tracing.ThreadAccountantOps.sampleAndCheckInterruption();
+    if (addToDistinctTable(dataSchema, distinctTable, dataTable)) {
+      return;
+    }
+  }
+}
+
+private boolean addToDistinctTable(DataSchema dataSchema, DistinctTable distinctTable, DataTable dataTable) {
+  int numColumns = dataSchema.size();
+  int numRows = dataTable.getNumberOfRows();
+  if (_queryContext.isNullHandlingEnabled()) {
+    return addWithNullHandling(dataSchema, distinctTable, dataTable, numColumns, numRows);
+  } else {
+    return addWithoutNullHandling(distinctTable, dataTable, numRows);
+  }
+}
+
+private boolean addWithNullHandling(DataSchema dataSchema, DistinctTable distinctTable, DataTable dataTable,
+    int numColumns, int numRows) {
+  RoaringBitmap[] nullBitmaps = new RoaringBitmap[numColumns];
+  for (int coldId = 0; coldId < numColumns; coldId++) {
+    nullBitmaps[coldId] = dataTable.getNullRowIds(coldId);
+  }
+  for (int rowId = 0; rowId < numRows; rowId++) {
+    if (distinctTable.addWithoutOrderBy(
+        new Record(SelectionOperatorUtils.extractRowFromDataTableWithNullHandling(dataTable, rowId, nullBitmaps)))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+private boolean addWithoutNullHandling(DistinctTable distinctTable, DataTable dataTable, int numRows) {
+  for (int rowId = 0; rowId < numRows; rowId++) {
+    if (distinctTable.addWithoutOrderBy(
+        new Record(SelectionOperatorUtils.extractRowFromDataTable(dataTable, rowId)))) {
+      return true;
+    }
+  }
+  return false;
+}
+//Refactoring end
       if (_queryContext.isNullHandlingEnabled()) {
         RoaringBitmap[] nullBitmaps = new RoaringBitmap[numColumns];
         for (int coldId = 0; coldId < numColumns; coldId++) {

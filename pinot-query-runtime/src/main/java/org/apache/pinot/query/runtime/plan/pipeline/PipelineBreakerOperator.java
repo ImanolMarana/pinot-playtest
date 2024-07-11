@@ -105,26 +105,72 @@ public class PipelineBreakerOperator extends MultiStageOperator {
     if (_errorBlock != null) {
       return _errorBlock;
     }
-    // NOTE: Put an empty list for each worker in case there is no data block returned from that worker
+
     if (_workerMap.size() == 1) {
-      Map.Entry<Integer, Operator<TransferableBlock>> entry = _workerMap.entrySet().iterator().next();
-      List<TransferableBlock> dataBlocks = new ArrayList<>();
-      _resultMap = Collections.singletonMap(entry.getKey(), dataBlocks);
-      Operator<TransferableBlock> operator = entry.getValue();
-      TransferableBlock block = operator.nextBlock();
-      while (!block.isSuccessfulEndOfStreamBlock()) {
-        if (block.isErrorBlock()) {
-          _errorBlock = block;
-          return block;
-        }
-        dataBlocks.add(block);
-        block = operator.nextBlock();
-      }
-      _queryStats = block.getQueryStats();
+      processSingleWorker();
     } else {
-      _resultMap = new HashMap<>();
-      for (int workerKey : _workerMap.keySet()) {
-        _resultMap.put(workerKey, new ArrayList<>());
+      processMultipleWorkers();
+    }
+
+    assert _queryStats != null;
+    addStats(_queryStats, _statMap);
+    return TransferableBlockUtils.getEndOfStreamTransferableBlock(_queryStats);
+  }
+
+  private void processSingleWorker() {
+    Map.Entry<Integer, Operator<TransferableBlock>> entry = _workerMap.entrySet().iterator().next();
+    List<TransferableBlock> dataBlocks = new ArrayList<>();
+    _resultMap = Collections.singletonMap(entry.getKey(), dataBlocks);
+    Operator<TransferableBlock> operator = entry.getValue();
+    TransferableBlock block = operator.nextBlock();
+    while (!block.isSuccessfulEndOfStreamBlock()) {
+      if (block.isErrorBlock()) {
+        _errorBlock = block;
+        return;
+      }
+      dataBlocks.add(block);
+      block = operator.nextBlock();
+    }
+    _queryStats = block.getQueryStats();
+  }
+
+  private void processMultipleWorkers() {
+    _resultMap = new HashMap<>();
+    for (int workerKey : _workerMap.keySet()) {
+      _resultMap.put(workerKey, new ArrayList<>());
+    }
+    // Keep polling from every operator in round-robin fashion
+    Queue<Map.Entry<Integer, Operator<TransferableBlock>>> entries = new ArrayDeque<>(_workerMap.entrySet());
+    while (!entries.isEmpty()) {
+      Map.Entry<Integer, Operator<TransferableBlock>> entry = entries.poll();
+      TransferableBlock block = entry.getValue().nextBlock();
+      if (block.isErrorBlock()) {
+        _errorBlock = block;
+        return;
+      }
+      if (block.isDataBlock()) {
+        _resultMap.get(entry.getKey()).add(block);
+        entries.offer(entry);
+      } else if (block.isSuccessfulEndOfStreamBlock()) {
+        processEndOfStreamBlock(block);
+      }
+    }
+  }
+
+  private void processEndOfStreamBlock(TransferableBlock block) {
+    MultiStageQueryStats queryStats = block.getQueryStats();
+    assert queryStats != null;
+    if (_queryStats == null) {
+      Preconditions.checkArgument(queryStats.getCurrentStageId() == _context.getStageId(),
+          "The current stage id of the stats holder: %s does not match the current stage id: %s",
+          queryStats.getCurrentStageId(), _context.getStageId());
+      _queryStats = queryStats;
+    } else {
+      _queryStats.mergeUpstream(queryStats);
+    }
+  }
+
+//Refactoring end
       }
       // Keep polling from every operator in round-robin fashion
       Queue<Map.Entry<Integer, Operator<TransferableBlock>>> entries = new ArrayDeque<>(_workerMap.entrySet());

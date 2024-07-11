@@ -142,36 +142,53 @@ public class PercentileEstAggregationFunction extends NullableSingleInputAggrega
   public void aggregateGroupByMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
       Map<ExpressionContext, BlockValSet> blockValSetMap) {
     BlockValSet blockValSet = blockValSetMap.get(_expression);
+
     if (blockValSet.getValueType() != DataType.BYTES) {
-      long[] longValues = blockValSet.getLongValuesSV();
-      forEachNotNull(length, blockValSet, (from, to) -> {
-        for (int i = from; i < to; i++) {
-          long value = longValues[i];
-          for (int groupKey : groupKeysArray[i]) {
-            getDefaultQuantileDigest(groupByResultHolder, groupKey).add(value);
-          }
-        }
-      });
+      aggregateGroupByMVForLongValues(length, groupKeysArray, groupByResultHolder, blockValSet);
     } else {
-      // Serialized QuantileDigest
-      byte[][] bytesValues = blockValSet.getBytesValuesSV();
-      forEachNotNull(length, blockValSet, (from, to) -> {
-        for (int i = from; i < to; i++) {
-          QuantileDigest value = ObjectSerDeUtils.QUANTILE_DIGEST_SER_DE.deserialize(bytesValues[i]);
-          for (int groupKey : groupKeysArray[i]) {
-            QuantileDigest quantileDigest = groupByResultHolder.getResult(groupKey);
-            if (quantileDigest != null) {
-              quantileDigest.merge(value);
-            } else {
-              // Create a new QuantileDigest for the group
-              groupByResultHolder.setValueForKey(groupKey,
-                  ObjectSerDeUtils.QUANTILE_DIGEST_SER_DE.deserialize(bytesValues[i]));
-            }
-          }
-        }
-      });
+      aggregateGroupByMVForBytesValues(length, groupKeysArray, groupByResultHolder, blockValSet);
     }
   }
+
+  private void aggregateGroupByMVForLongValues(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    long[] longValues = blockValSet.getLongValuesSV();
+    forEachNotNull(length, blockValSet, (from, to) -> {
+      for (int i = from; i < to; i++) {
+        long value = longValues[i];
+        for (int groupKey : groupKeysArray[i]) {
+          getDefaultQuantileDigest(groupByResultHolder, groupKey).add(value);
+        }
+      }
+    });
+  }
+
+  private void aggregateGroupByMVForBytesValues(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    byte[][] bytesValues = blockValSet.getBytesValuesSV();
+    forEachNotNull(length, blockValSet, (from, to) -> {
+      for (int i = from; i < to; i++) {
+        QuantileDigest value = ObjectSerDeUtils.QUANTILE_DIGEST_SER_DE.deserialize(bytesValues[i]);
+        for (int groupKey : groupKeysArray[i]) {
+          mergeOrCreateQuantileDigest(groupByResultHolder, groupKey, value, bytesValues[i]);
+        }
+      }
+    });
+  }
+
+  private void mergeOrCreateQuantileDigest(GroupByResultHolder groupByResultHolder, int groupKey,
+      QuantileDigest value, byte[] bytesValue) {
+    QuantileDigest quantileDigest = groupByResultHolder.getResult(groupKey);
+    if (quantileDigest != null) {
+      quantileDigest.merge(value);
+    } else {
+      // Create a new QuantileDigest for the group
+      groupByResultHolder.setValueForKey(groupKey,
+          ObjectSerDeUtils.QUANTILE_DIGEST_SER_DE.deserialize(bytesValue));
+    }
+  }
+
+//Refactoring end
 
   @Override
   public QuantileDigest extractAggregationResult(AggregationResultHolder aggregationResultHolder) {

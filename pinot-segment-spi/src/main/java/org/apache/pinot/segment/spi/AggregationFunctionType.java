@@ -460,46 +460,52 @@ public enum AggregationFunctionType {
    * <p>NOTE: Underscores in the function name are ignored.
    */
   public static AggregationFunctionType getAggregationFunctionType(String functionName) {
-    if (functionName.regionMatches(true, 0, "percentile", 0, 10)) {
-      // This style of aggregation functions is not supported in the multistage engine
-      String remainingFunctionName = getNormalizedAggregationFunctionName(functionName).substring(10).toUpperCase();
-      if (remainingFunctionName.isEmpty() || remainingFunctionName.matches("\\d+")) {
-        return PERCENTILE;
-      } else if (remainingFunctionName.equals("EST") || remainingFunctionName.matches("EST\\d+")) {
-        return PERCENTILEEST;
-      } else if (remainingFunctionName.equals("RAWEST") || remainingFunctionName.matches("RAWEST\\d+")) {
-        return PERCENTILERAWEST;
-      } else if (remainingFunctionName.equals("TDIGEST") || remainingFunctionName.matches("TDIGEST\\d+")) {
-        return PERCENTILETDIGEST;
-      } else if (remainingFunctionName.equals("RAWTDIGEST") || remainingFunctionName.matches("RAWTDIGEST\\d+")) {
-        return PERCENTILERAWTDIGEST;
-      } else if (remainingFunctionName.equals("KLL") || remainingFunctionName.matches("KLL\\d+")) {
-        return PERCENTILEKLL;
-      } else if (remainingFunctionName.equals("RAWKLL") || remainingFunctionName.matches("RAWKLL\\d+")) {
-        return PERCENTILERAWKLL;
-      } else if (remainingFunctionName.equals("MV") || remainingFunctionName.matches("\\d+MV")) {
-        return PERCENTILEMV;
-      } else if (remainingFunctionName.equals("ESTMV") || remainingFunctionName.matches("EST\\d+MV")) {
-        return PERCENTILEESTMV;
-      } else if (remainingFunctionName.equals("RAWESTMV") || remainingFunctionName.matches("RAWEST\\d+MV")) {
-        return PERCENTILERAWESTMV;
-      } else if (remainingFunctionName.equals("TDIGESTMV") || remainingFunctionName.matches("TDIGEST\\d+MV")) {
-        return PERCENTILETDIGESTMV;
-      } else if (remainingFunctionName.equals("RAWTDIGESTMV") || remainingFunctionName.matches("RAWTDIGEST\\d+MV")) {
-        return PERCENTILERAWTDIGESTMV;
-      } else if (remainingFunctionName.equals("KLLMV") || remainingFunctionName.matches("KLL\\d+MV")) {
-        return PERCENTILEKLLMV;
-      } else if (remainingFunctionName.equals("RAWKLLMV") || remainingFunctionName.matches("RAWKLL\\d+MV")) {
-        return PERCENTILEKLLMV;
-      } else {
-        throw new IllegalArgumentException("Invalid aggregation function name: " + functionName);
-      }
-    } else {
-      try {
-        return AggregationFunctionType.valueOf(getNormalizedAggregationFunctionName(functionName));
-      } catch (IllegalArgumentException e) {
-        throw new IllegalArgumentException("Invalid aggregation function name: " + functionName);
-      }
+  if (functionName.regionMatches(true, 0, "percentile", 0, 10)) {
+    return getPercentileAggregationFunctionType(functionName);
+  } else {
+    try {
+      return AggregationFunctionType.valueOf(getNormalizedAggregationFunctionName(functionName));
+    } catch (IllegalArgumentException e) {
+      throw new IllegalArgumentException("Invalid aggregation function name: " + functionName);
     }
+  }
+}
+
+private static AggregationFunctionType getPercentileAggregationFunctionType(String functionName) {
+  String remainingFunctionName = getNormalizedAggregationFunctionName(functionName).substring(10).toUpperCase();
+  if (remainingFunctionName.isEmpty() || remainingFunctionName.matches("\\d+")) {
+    return PERCENTILE;
+  } else if (remainingFunctionName.equals("EST") || remainingFunctionName.matches("EST\\d+")) {
+    return PERCENTILEEST;
+  } else if (remainingFunctionName.equals("RAWEST") || remainingFunctionName.matches("RAWEST\\d+")) {
+    return PERCENTILERAWEST;
+  } else if (remainingFunctionName.equals("TDIGEST") || remainingFunctionName.matches("TDIGEST\\d+")) {
+    return PERCENTILETDIGEST;
+  } else if (remainingFunctionName.equals("RAWTDIGEST") || remainingFunctionName.matches("RAWTDIGEST\\d+")) {
+    return PERCENTILERAWTDIGEST;
+  } else if (remainingFunctionName.equals("KLL") || remainingFunctionName.matches("KLL\\d+")) {
+    return PERCENTILEKLL;
+  } else if (remainingFunctionName.equals("RAWKLL") || remainingFunctionName.matches("RAWKLL\\d+")) {
+    return PERCENTILERAWKLL;
+  } else if (remainingFunctionName.equals("MV") || remainingFunctionName.matches("\\d+MV")) {
+    return PERCENTILEMV;
+  } else if (remainingFunctionName.equals("ESTMV") || remainingFunctionName.matches("EST\\d+MV")) {
+    return PERCENTILEESTMV;
+  } else if (remainingFunctionName.equals("RAWESTMV") || remainingFunctionName.matches("RAWEST\\d+MV")) {
+    return PERCENTILERAWESTMV;
+  } else if (remainingFunctionName.equals("TDIGESTMV") || remainingFunctionName.matches("TDIGEST\\d+MV")) {
+    return PERCENTILETDIGESTMV;
+  } else if (remainingFunctionName.equals("RAWTDIGESTMV") || remainingFunctionName.matches("RAWTDIGEST\\d+MV")) {
+    return PERCENTILERAWTDIGESTMV;
+  } else if (remainingFunctionName.equals("KLLMV") || remainingFunctionName.matches("KLL\\d+MV")) {
+    return PERCENTILEKLLMV;
+  } else if (remainingFunctionName.equals("RAWKLLMV") || remainingFunctionName.matches("RAWKLL\\d+MV")) {
+    return PERCENTILEKLLMV;
+  } else {
+    throw new IllegalArgumentException("Invalid aggregation function name: " + functionName);
+  }
+}
+
+//Refactoring end
   }
 }

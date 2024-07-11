@@ -69,60 +69,171 @@ public class RawMultiColumnDistinctExecutor implements DistinctExecutor {
     int numDocs = valueBlock.getNumDocs();
     int numExpressions = _expressions.size();
     if (!_hasMVExpression) {
-      BlockValSet[] blockValSets = new BlockValSet[numExpressions];
-      for (int i = 0; i < numExpressions; i++) {
-        blockValSets[i] = valueBlock.getBlockValueSet(_expressions.get(i));
-      }
-      RoaringBitmap[] nullBitmaps = new RoaringBitmap[numExpressions];
-      if (_nullHandlingEnabled) {
-        for (int i = 0; i < numExpressions; i++) {
-          nullBitmaps[i] = blockValSets[i].getNullBitmap();
-        }
-      }
-      RowBasedBlockValueFetcher valueFetcher = new RowBasedBlockValueFetcher(blockValSets);
-      for (int docId = 0; docId < numDocs; docId++) {
-        Record record = new Record(valueFetcher.getRow(docId));
-        if (_nullHandlingEnabled) {
-          for (int i = 0; i < numExpressions; i++) {
-            if (nullBitmaps[i] != null && nullBitmaps[i].contains(docId)) {
-              record.getValues()[i] = null;
-            }
-          }
-        }
-        if (_distinctTable.hasOrderBy()) {
-          _distinctTable.addWithOrderBy(record);
-        } else {
-          if (_distinctTable.addWithoutOrderBy(record)) {
-            return true;
-          }
-        }
-      }
+      return processSingleValueExpressions(valueBlock, numDocs, numExpressions);
     } else {
       // TODO(https://github.com/apache/pinot/issues/10882): support NULL for multi-value
-      Object[][] svValues = new Object[numExpressions][];
-      Object[][][] mvValues = new Object[numExpressions][][];
-      for (int i = 0; i < numExpressions; i++) {
-        BlockValSet blockValueSet = valueBlock.getBlockValueSet(_expressions.get(i));
-        if (blockValueSet.isSingleValue()) {
-          svValues[i] = getSVValues(blockValueSet, numDocs);
-        } else {
-          mvValues[i] = getMVValues(blockValueSet, numDocs);
-        }
+      return processMultiValueExpressions(valueBlock, numDocs, numExpressions);
+    }
+  }
+  
+  private boolean processSingleValueExpressions(ValueBlock valueBlock, int numDocs, int numExpressions) {
+    BlockValSet[] blockValSets = new BlockValSet[numExpressions];
+    for (int i = 0; i < numExpressions; i++) {
+      blockValSets[i] = valueBlock.getBlockValueSet(_expressions.get(i));
+    }
+    RoaringBitmap[] nullBitmaps = getNullBitmaps(numExpressions, blockValSets);
+    RowBasedBlockValueFetcher valueFetcher = new RowBasedBlockValueFetcher(blockValSets);
+    for (int docId = 0; docId < numDocs; docId++) {
+      Record record = new Record(valueFetcher.getRow(docId));
+      record = handleNullValues(record, nullBitmaps, docId, numExpressions);
+      if (addToDistinctTable(record)) {
+        return true;
       }
-      for (int i = 0; i < numDocs; i++) {
-        Object[][] records = DistinctExecutorUtils.getRecords(svValues, mvValues, i);
-        for (Object[] record : records) {
-          if (_distinctTable.hasOrderBy()) {
-            _distinctTable.addWithOrderBy(new Record(record));
-          } else {
-            if (_distinctTable.addWithoutOrderBy(new Record(record))) {
-              return true;
-            }
-          }
+    }
+    return false;
+  }
+  
+  private boolean processMultiValueExpressions(ValueBlock valueBlock, int numDocs, int numExpressions) {
+    Object[][] svValues = new Object[numExpressions][];
+    Object[][][] mvValues = new Object[numExpressions][][];
+    for (int i = 0; i < numExpressions; i++) {
+      BlockValSet blockValueSet = valueBlock.getBlockValueSet(_expressions.get(i));
+      if (blockValueSet.isSingleValue()) {
+        svValues[i] = getSVValues(blockValueSet, numDocs);
+      } else {
+        mvValues[i] = getMVValues(blockValueSet, numDocs);
+      }
+    }
+    for (int i = 0; i < numDocs; i++) {
+      Object[][] records = DistinctExecutorUtils.getRecords(svValues, mvValues, i);
+      for (Object[] record : records) {
+        if (addToDistinctTable(new Record(record))) {
+          return true;
         }
       }
     }
     return false;
+  }
+  
+  private RoaringBitmap[] getNullBitmaps(int numExpressions, BlockValSet[] blockValSets) {
+    RoaringBitmap[] nullBitmaps = new RoaringBitmap[numExpressions];
+    if (_nullHandlingEnabled) {
+      for (int i = 0; i < numExpressions; i++) {
+        nullBitmaps[i] = blockValSets[i].getNullBitmap();
+      }
+    }
+    return nullBitmaps;
+  }
+  
+  private Record handleNullValues(Record record, RoaringBitmap[] nullBitmaps, int docId, int numExpressions) {
+    if (_nullHandlingEnabled) {
+      for (int i = 0; i < numExpressions; i++) {
+        if (nullBitmaps[i] != null && nullBitmaps[i].contains(docId)) {
+          record.getValues()[i] = null;
+        }
+      }
+    }
+    return record;
+  }
+  
+  private boolean addToDistinctTable(Record record) {
+    if (_distinctTable.hasOrderBy()) {
+      _distinctTable.addWithOrderBy(record);
+    } else {
+      if (_distinctTable.addWithoutOrderBy(record)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  
+  private Object[] getSVValues(BlockValSet blockValueSet, int numDocs) {
+    Object[] values;
+    DataType storedType = blockValueSet.getValueType().getStoredType();
+    switch (storedType) {
+      case INT:
+        int[] intValues = blockValueSet.getIntValuesSV();
+        values = new Object[numDocs];
+        for (int j = 0; j < numDocs; j++) {
+          values[j] = intValues[j];
+        }
+        return values;
+      case LONG:
+        long[] longValues = blockValueSet.getLongValuesSV();
+        values = new Object[numDocs];
+        for (int j = 0; j < numDocs; j++) {
+          values[j] = longValues[j];
+        }
+        return values;
+      case FLOAT:
+        float[] floatValues = blockValueSet.getFloatValuesSV();
+        values = new Object[numDocs];
+        for (int j = 0; j < numDocs; j++) {
+          values[j] = floatValues[j];
+        }
+        return values;
+      case DOUBLE:
+        double[] doubleValues = blockValueSet.getDoubleValuesSV();
+        values = new Object[numDocs];
+        for (int j = 0; j < numDocs; j++) {
+          values[j] = doubleValues[j];
+        }
+        return values;
+      case BIG_DECIMAL:
+        return blockValueSet.getBigDecimalValuesSV();
+      case STRING:
+        return blockValueSet.getStringValuesSV();
+      case BYTES:
+        byte[][] bytesValues = blockValueSet.getBytesValuesSV();
+        values = new Object[numDocs];
+        for (int j = 0; j < numDocs; j++) {
+          values[j] = new ByteArray(bytesValues[j]);
+        }
+        return values;
+      default:
+        throw new IllegalStateException("Unsupported value type: " + storedType + " for single-value column");
+    }
+  }
+  
+  private Object[][] getMVValues(BlockValSet blockValueSet, int numDocs) {
+    Object[][] values;
+    DataType storedType = blockValueSet.getValueType().getStoredType();
+    switch (storedType) {
+      case INT:
+        int[][] intValues = blockValueSet.getIntValuesMV();
+        values = new Object[numDocs][];
+        for (int j = 0; j < numDocs; j++) {
+          values[j] = ArrayUtils.toObject(intValues[j]);
+        }
+        return values;
+      case LONG:
+        long[][] longValues = blockValueSet.getLongValuesMV();
+        values = new Object[numDocs][];
+        for (int j = 0; j < numDocs; j++) {
+          values[j] = ArrayUtils.toObject(longValues[j]);
+        }
+        return values;
+      case FLOAT:
+        float[][] floatValues = blockValueSet.getFloatValuesMV();
+        values = new Object[numDocs][];
+        for (int j = 0; j < numDocs; j++) {
+          values[j] = ArrayUtils.toObject(floatValues[j]);
+        }
+        return values;
+      case DOUBLE:
+        double[][] doubleValues = blockValueSet.getDoubleValuesMV();
+        values = new Object[numDocs][];
+        for (int j = 0; j < numDocs; j++) {
+          values[j] = ArrayUtils.toObject(doubleValues[j]);
+        }
+        return values;
+      case STRING:
+        return blockValueSet.getStringValuesMV();
+      default:
+        throw new IllegalStateException("Unsupported value type: " + storedType + " for multi-value column");
+    }
+  }
+//Refactoring end
   }
 
   private Object[] getSVValues(BlockValSet blockValueSet, int numDocs) {

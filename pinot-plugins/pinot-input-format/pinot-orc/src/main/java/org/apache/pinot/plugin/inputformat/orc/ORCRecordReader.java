@@ -296,94 +296,124 @@ public class ORCRecordReader implements RecordReader {
     if (columnVector.isRepeating) {
       rowId = 0;
     }
+
     switch (category) {
       case BOOLEAN:
-        // Extract to String
-        LongColumnVector longColumnVector = (LongColumnVector) columnVector;
-        if (longColumnVector.noNulls || !longColumnVector.isNull[rowId]) {
-          return Boolean.toString(longColumnVector.vector[rowId] == 1);
-        } else {
-          return null;
-        }
+        return extractBooleanValue((LongColumnVector) columnVector, rowId);
       case BYTE:
       case SHORT:
       case INT:
-        // Extract to Integer
-        longColumnVector = (LongColumnVector) columnVector;
-        if (longColumnVector.noNulls || !longColumnVector.isNull[rowId]) {
-          return (int) longColumnVector.vector[rowId];
-        } else {
-          return null;
-        }
+        return extractIntValue((LongColumnVector) columnVector, rowId);
       case LONG:
       case DATE:
-        // Extract to Long
-        longColumnVector = (LongColumnVector) columnVector;
-        if (longColumnVector.noNulls || !longColumnVector.isNull[rowId]) {
-          return longColumnVector.vector[rowId];
-        } else {
-          return null;
-        }
+        return extractLongValue((LongColumnVector) columnVector, rowId);
       case TIMESTAMP:
-        // Extract to Long
-        TimestampColumnVector timestampColumnVector = (TimestampColumnVector) columnVector;
-        if (timestampColumnVector.noNulls || !timestampColumnVector.isNull[rowId]) {
-          return timestampColumnVector.time[rowId];
-        } else {
-          return null;
-        }
+        return extractTimestampValue((TimestampColumnVector) columnVector, rowId);
       case FLOAT:
-        // Extract to Float
-        DoubleColumnVector doubleColumnVector = (DoubleColumnVector) columnVector;
-        if (doubleColumnVector.noNulls || !doubleColumnVector.isNull[rowId]) {
-          return (float) doubleColumnVector.vector[rowId];
-        } else {
-          return null;
-        }
+        return extractFloatValue((DoubleColumnVector) columnVector, rowId);
       case DOUBLE:
-        // Extract to Double
-        doubleColumnVector = (DoubleColumnVector) columnVector;
-        if (doubleColumnVector.noNulls || !doubleColumnVector.isNull[rowId]) {
-          return doubleColumnVector.vector[rowId];
-        } else {
-          return null;
-        }
+        return extractDoubleValue((DoubleColumnVector) columnVector, rowId);
       case STRING:
       case VARCHAR:
       case CHAR:
-        // Extract to String
-        BytesColumnVector bytesColumnVector = (BytesColumnVector) columnVector;
-        if (bytesColumnVector.noNulls || !bytesColumnVector.isNull[rowId]) {
-          int length = bytesColumnVector.length[rowId];
-          return new String(bytesColumnVector.vector[rowId], bytesColumnVector.start[rowId], length, UTF_8);
-        } else {
-          return null;
-        }
+        return extractStringValue((BytesColumnVector) columnVector, rowId);
       case BINARY:
-        // Extract to byte[]
-        bytesColumnVector = (BytesColumnVector) columnVector;
-        if (bytesColumnVector.noNulls || !bytesColumnVector.isNull[rowId]) {
-          int length = bytesColumnVector.length[rowId];
-          byte[] bytes = new byte[length];
-          System.arraycopy(bytesColumnVector.vector[rowId], bytesColumnVector.start[rowId], bytes, 0, length);
-          return bytes;
-        } else {
-          return null;
-        }
+        return extractBinaryValue((BytesColumnVector) columnVector, rowId);
       case DECIMAL:
-        // Extract to string
-        DecimalColumnVector decimalColumnVector = (DecimalColumnVector) columnVector;
-        if (decimalColumnVector.noNulls || !decimalColumnVector.isNull[rowId]) {
-          StringBuilder stringBuilder = new StringBuilder();
-          decimalColumnVector.stringifyValue(stringBuilder, rowId);
-          return stringBuilder.toString();
-        } else {
-          return null;
-        }
+        return extractDecimalValue((DecimalColumnVector) columnVector, rowId);
       default:
         // Unsupported types
         throw new IllegalStateException("Unsupported field type: " + category + " for field: " + field);
     }
+  }
+
+  @Nullable
+  private static Object extractBooleanValue(LongColumnVector columnVector, int rowId) {
+    if (columnVector.noNulls || !columnVector.isNull[rowId]) {
+      return Boolean.toString(columnVector.vector[rowId] == 1);
+    } else {
+      return null;
+    }
+  }
+
+  @Nullable
+  private static Object extractIntValue(LongColumnVector columnVector, int rowId) {
+    if (columnVector.noNulls || !columnVector.isNull[rowId]) {
+      return (int) columnVector.vector[rowId];
+    } else {
+      return null;
+    }
+  }
+
+  @Nullable
+  private static Object extractLongValue(LongColumnVector columnVector, int rowId) {
+    if (columnVector.noNulls || !columnVector.isNull[rowId]) {
+      return columnVector.vector[rowId];
+    } else {
+      return null;
+    }
+  }
+
+  @Nullable
+  private static Object extractTimestampValue(TimestampColumnVector columnVector, int rowId) {
+    if (columnVector.noNulls || !columnVector.isNull[rowId]) {
+      return columnVector.time[rowId];
+    } else {
+      return null;
+    }
+  }
+
+  @Nullable
+  private static Object extractFloatValue(DoubleColumnVector columnVector, int rowId) {
+    if (columnVector.noNulls || !columnVector.isNull[rowId]) {
+      return (float) columnVector.vector[rowId];
+    } else {
+      return null;
+    }
+  }
+
+  @Nullable
+  private static Object extractDoubleValue(DoubleColumnVector columnVector, int rowId) {
+    if (columnVector.noNulls || !columnVector.isNull[rowId]) {
+      return columnVector.vector[rowId];
+    } else {
+      return null;
+    }
+  }
+
+  @Nullable
+  private static Object extractStringValue(BytesColumnVector columnVector, int rowId) {
+    if (columnVector.noNulls || !columnVector.isNull[rowId]) {
+      int length = columnVector.length[rowId];
+      return new String(columnVector.vector[rowId], columnVector.start[rowId], length, UTF_8);
+    } else {
+      return null;
+    }
+  }
+
+  @Nullable
+  private static Object extractBinaryValue(BytesColumnVector columnVector, int rowId) {
+    if (columnVector.noNulls || !columnVector.isNull[rowId]) {
+      int length = columnVector.length[rowId];
+      byte[] bytes = new byte[length];
+      System.arraycopy(columnVector.vector[rowId], columnVector.start[rowId], bytes, 0, length);
+      return bytes;
+    } else {
+      return null;
+    }
+  }
+
+  @Nullable
+  private static Object extractDecimalValue(DecimalColumnVector columnVector, int rowId) {
+    if (columnVector.noNulls || !columnVector.isNull[rowId]) {
+      StringBuilder stringBuilder = new StringBuilder();
+      columnVector.stringifyValue(stringBuilder, rowId);
+      return stringBuilder.toString();
+    } else {
+      return null;
+    }
+  }
+//Refactoring end
   }
 
   @Override

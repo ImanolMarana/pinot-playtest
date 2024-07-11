@@ -569,77 +569,76 @@ public class ImmutableJsonIndexReader implements JsonIndexReader {
   private Pair<String, MutableRoaringBitmap> getKeyAndFlattenedDocIds(String key) {
     MutableRoaringBitmap matchingDocIds = null;
     if (_version == BaseJsonIndexCreator.VERSION_2) {
-      // Process the array index within the key if exists
-      // E.g. "[*]"=1 -> "."='1'
-      // E.g. "[0]"=1 -> ".$index"='0' && "."='1'
-      // E.g. "[0][1]"=1 -> ".$index"='0' && "..$index"='1' && ".."='1'
-      // E.g. ".foo[*].bar[*].foobar"='abc' -> ".foo..bar..foobar"='abc'
-      // E.g. ".foo[0].bar[1].foobar"='abc' -> ".foo.$index"='0' && ".foo..bar.$index"='1' && ".foo..bar..foobar"='abc'
-      // E.g. ".foo[0][1].bar"='abc' -> ".foo.$index"='0' && ".foo..$index"='1' && ".foo...bar"='abc'
-      int leftBracketIndex;
-      while ((leftBracketIndex = key.indexOf('[')) >= 0) {
-        int rightBracketIndex = key.indexOf(']', leftBracketIndex + 2);
-        Preconditions.checkArgument(rightBracketIndex > 0, "Missing right bracket in key: %s", key);
-
-        String leftPart = key.substring(0, leftBracketIndex);
-        String arrayIndex = key.substring(leftBracketIndex + 1, rightBracketIndex);
-        String rightPart = key.substring(rightBracketIndex + 1);
-
-        if (!arrayIndex.equals(JsonUtils.WILDCARD)) {
-          // "[0]"=1 -> ".$index"='0' && "."='1'
-          // ".foo[1].bar"='abc' -> ".foo.$index"=1 && ".foo..bar"='abc'
-          String searchKey =
-                  leftPart + JsonUtils.ARRAY_INDEX_KEY + BaseJsonIndexCreator.KEY_VALUE_SEPARATOR + arrayIndex;
-          int dictId = _dictionary.indexOf(searchKey);
-          if (dictId >= 0) {
-            ImmutableRoaringBitmap docIds = _invertedIndex.getDocIds(dictId);
-            if (matchingDocIds == null) {
-              matchingDocIds = docIds.toMutableRoaringBitmap();
-            } else {
-              matchingDocIds.and(docIds);
-            }
-          } else {
-            return Pair.of(null, new MutableRoaringBitmap());
-          }
-        }
-
-        key = leftPart + JsonUtils.KEY_SEPARATOR + rightPart;
-      }
+      key = processArrayIndexForV2(key, matchingDocIds);
     } else {
-      // For V1 backward-compatibility
-      // Process the array index within the key if exists
-      // E.g. "foo[0].bar[1].foobar"='abc' -> "foo.$index"=0 && "foo.bar.$index"=1 && "foo.bar.foobar"='abc'
-      int leftBracketIndex;
-      while ((leftBracketIndex = key.indexOf('[')) > 0) {
-        int rightBracketIndex = key.indexOf(']', leftBracketIndex + 2);
-        Preconditions.checkArgument(rightBracketIndex > 0, "Missing right bracket in key: %s", key);
-
-        String leftPart = key.substring(0, leftBracketIndex);
-        String arrayIndex = key.substring(leftBracketIndex + 1, rightBracketIndex);
-        String rightPart = key.substring(rightBracketIndex + 1);
-
-        if (!arrayIndex.equals(JsonUtils.WILDCARD)) {
-          // "foo[1].bar"='abc' -> "foo.$index"=1 && "foo.bar"='abc'
-          String searchKey =
-                  leftPart + JsonUtils.ARRAY_INDEX_KEY + BaseJsonIndexCreator.KEY_VALUE_SEPARATOR + arrayIndex;
-          int dictId = _dictionary.indexOf(searchKey);
-          if (dictId >= 0) {
-            ImmutableRoaringBitmap docIds = _invertedIndex.getDocIds(dictId);
-            if (matchingDocIds == null) {
-              matchingDocIds = docIds.toMutableRoaringBitmap();
-            } else {
-              matchingDocIds.and(docIds);
-            }
-          } else {
-            return Pair.of(null, new MutableRoaringBitmap());
-          }
-        }
-
-        key = leftPart + rightPart;
-      }
+      key = processArrayIndexForV1(key, matchingDocIds);
     }
     return Pair.of(key, matchingDocIds);
   }
+
+  private String processArrayIndexForV2(String key, MutableRoaringBitmap matchingDocIds) {
+    int leftBracketIndex;
+    while ((leftBracketIndex = key.indexOf('[')) >= 0) {
+      int rightBracketIndex = key.indexOf(']', leftBracketIndex + 2);
+      Preconditions.checkArgument(rightBracketIndex > 0, "Missing right bracket in key: %s", key);
+
+      String leftPart = key.substring(0, leftBracketIndex);
+      String arrayIndex = key.substring(leftBracketIndex + 1, rightBracketIndex);
+      String rightPart = key.substring(rightBracketIndex + 1);
+
+      if (!arrayIndex.equals(JsonUtils.WILDCARD)) {
+        matchingDocIds = handleArrayIndex(matchingDocIds, leftPart, arrayIndex);
+        if (matchingDocIds == null) {
+          return null;
+        }
+      }
+
+      key = leftPart + JsonUtils.KEY_SEPARATOR + rightPart;
+    }
+    return key;
+  }
+
+  private String processArrayIndexForV1(String key, MutableRoaringBitmap matchingDocIds) {
+    int leftBracketIndex;
+    while ((leftBracketIndex = key.indexOf('[')) > 0) {
+      int rightBracketIndex = key.indexOf(']', leftBracketIndex + 2);
+      Preconditions.checkArgument(rightBracketIndex > 0, "Missing right bracket in key: %s", key);
+
+      String leftPart = key.substring(0, leftBracketIndex);
+      String arrayIndex = key.substring(leftBracketIndex + 1, rightBracketIndex);
+      String rightPart = key.substring(rightBracketIndex + 1);
+
+      if (!arrayIndex.equals(JsonUtils.WILDCARD)) {
+        matchingDocIds = handleArrayIndex(matchingDocIds, leftPart, arrayIndex);
+        if (matchingDocIds == null) {
+          return null;
+        }
+      }
+
+      key = leftPart + rightPart;
+    }
+    return key;
+  }
+
+  private MutableRoaringBitmap handleArrayIndex(MutableRoaringBitmap matchingDocIds, String leftPart,
+      String arrayIndex) {
+    String searchKey =
+        leftPart + JsonUtils.ARRAY_INDEX_KEY + BaseJsonIndexCreator.KEY_VALUE_SEPARATOR + arrayIndex;
+    int dictId = _dictionary.indexOf(searchKey);
+    if (dictId >= 0) {
+      ImmutableRoaringBitmap docIds = _invertedIndex.getDocIds(dictId);
+      if (matchingDocIds == null) {
+        matchingDocIds = docIds.toMutableRoaringBitmap();
+      } else {
+        matchingDocIds.and(docIds);
+      }
+    } else {
+      return new MutableRoaringBitmap();
+    }
+    return matchingDocIds;
+  }
+
+//Refactoring end
 
   private PeekableIntIterator intersect(MutableRoaringBitmap a, ImmutableRoaringBitmap b) {
     a.and(b);

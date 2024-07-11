@@ -168,35 +168,52 @@ public class SortOperator extends MultiStageOperator {
   private TransferableBlock consumeInputBlocks() {
     TransferableBlock block = _upstreamOperator.nextBlock();
     while (block.isDataBlock()) {
-      List<Object[]> container = block.getContainer();
-      if (_priorityQueue == null) {
-        // TODO: when push-down properly, we shouldn't get more than _numRowsToKeep
-        int numRows = _rows.size();
-        if (numRows < _numRowsToKeep) {
-          if (numRows + container.size() < _numRowsToKeep) {
-            _rows.addAll(container);
-          } else {
-            _rows.addAll(container.subList(0, _numRowsToKeep - numRows));
-            if (LOGGER.isDebugEnabled()) {
-              // this operatorId is an old name. It is being kept to avoid breaking changes on the log message.
-              String operatorId = Joiner.on("_")
-                  .join(getClass().getSimpleName(), _context.getStageId(), _context.getServer());
-              LOGGER.debug("Early terminate at SortOperator - operatorId={}, opChainId={}", operatorId,
-                  _context.getId());
-            }
-            // setting operator to be early terminated and awaits EOS block next.
-            earlyTerminate();
-          }
-        }
-      } else {
-        for (Object[] row : container) {
-          SelectionOperatorUtils.addToPriorityQueue(row, _priorityQueue, _numRowsToKeep);
-        }
-      }
+      processInputBlock(block);
       block = _upstreamOperator.nextBlock();
     }
     return block;
   }
+
+  private void processInputBlock(TransferableBlock block) {
+    List<Object[]> container = block.getContainer();
+    if (_priorityQueue == null) {
+      handleInputBlockWithoutPriorityQueue(container);
+    } else {
+      addToPriorityQueue(container);
+    }
+  }
+
+  private void handleInputBlockWithoutPriorityQueue(List<Object[]> container) {
+    // TODO: when push-down properly, we shouldn't get more than _numRowsToKeep
+    int numRows = _rows.size();
+    if (numRows < _numRowsToKeep) {
+      addRowsToLimitedList(container, numRows);
+    }
+  }
+
+  private void addRowsToLimitedList(List<Object[]> container, int numRows) {
+    if (numRows + container.size() < _numRowsToKeep) {
+      _rows.addAll(container);
+    } else {
+      _rows.addAll(container.subList(0, _numRowsToKeep - numRows));
+      if (LOGGER.isDebugEnabled()) {
+        // this operatorId is an old name. It is being kept to avoid breaking changes on the log message.
+        String operatorId = Joiner.on("_")
+            .join(getClass().getSimpleName(), _context.getStageId(), _context.getServer());
+        LOGGER.debug("Early terminate at SortOperator - operatorId={}, opChainId={}", operatorId,
+            _context.getId());
+      }
+      // setting operator to be early terminated and awaits EOS block next.
+      earlyTerminate();
+    }
+  }
+
+  private void addToPriorityQueue(List<Object[]> container) {
+    for (Object[] row : container) {
+      SelectionOperatorUtils.addToPriorityQueue(row, _priorityQueue, _numRowsToKeep);
+    }
+  }
+//Refactoring end
 
   public enum StatKey implements StatMap.Key {
     EXECUTION_TIME_MS(StatMap.Type.LONG) {

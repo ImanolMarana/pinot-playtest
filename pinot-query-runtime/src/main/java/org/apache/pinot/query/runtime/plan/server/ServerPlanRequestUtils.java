@@ -278,60 +278,57 @@ public class ServerPlanRequestUtils {
     final FieldSpec.DataType storedType = columnDataType.getStoredType().toDataType();
     final int numRows = dataContainer.size();
     List<Expression> expressions = new ArrayList<>();
+
     switch (storedType) {
       case INT:
-        int[] arrInt = new int[numRows];
-        for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
-          arrInt[rowIdx] = (int) dataContainer.get(rowIdx)[colIdx];
-        }
-        Arrays.sort(arrInt);
-        for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
-          expressions.add(RequestUtils.getLiteralExpression(arrInt[rowIdx]));
-        }
+        expressions = computeInOperandsForNumber(dataContainer, colIdx, numRows, (row, c) -> (int) row[c]);
         break;
       case LONG:
-        long[] arrLong = new long[numRows];
-        for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
-          arrLong[rowIdx] = (long) dataContainer.get(rowIdx)[colIdx];
-        }
-        Arrays.sort(arrLong);
-        for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
-          expressions.add(RequestUtils.getLiteralExpression(arrLong[rowIdx]));
-        }
+        expressions = computeInOperandsForNumber(dataContainer, colIdx, numRows, (row, c) -> (long) row[c]);
         break;
       case FLOAT:
-        float[] arrFloat = new float[numRows];
-        for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
-          arrFloat[rowIdx] = (float) dataContainer.get(rowIdx)[colIdx];
-        }
-        Arrays.sort(arrFloat);
-        for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
-          expressions.add(RequestUtils.getLiteralExpression(arrFloat[rowIdx]));
-        }
+        expressions = computeInOperandsForNumber(dataContainer, colIdx, numRows, (row, c) -> (float) row[c]);
         break;
       case DOUBLE:
-        double[] arrDouble = new double[numRows];
-        for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
-          arrDouble[rowIdx] = (double) dataContainer.get(rowIdx)[colIdx];
-        }
-        Arrays.sort(arrDouble);
-        for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
-          expressions.add(RequestUtils.getLiteralExpression(arrDouble[rowIdx]));
-        }
+        expressions = computeInOperandsForNumber(dataContainer, colIdx, numRows, (row, c) -> (double) row[c]);
         break;
       case STRING:
-        String[] arrString = new String[numRows];
-        for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
-          arrString[rowIdx] = (String) dataContainer.get(rowIdx)[colIdx];
-        }
-        Arrays.sort(arrString);
-        for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
-          expressions.add(RequestUtils.getLiteralExpression(arrString[rowIdx]));
-        }
+        expressions = computeInOperandsForString(dataContainer, colIdx, numRows);
         break;
       default:
         throw new IllegalStateException("Illegal SV data type for ID_SET aggregation function: " + storedType);
     }
     return expressions;
   }
-}
+
+  private static List<Expression> computeInOperandsForNumber(List<Object[]> dataContainer, int colIdx, int numRows,
+      DataExtractor extractor) {
+    Number[] arr = new Number[numRows];
+    for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
+      arr[rowIdx] = extractor.extractData(dataContainer.get(rowIdx), colIdx);
+    }
+    Arrays.sort(arr);
+    List<Expression> expressions = new ArrayList<>();
+    for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
+      expressions.add(RequestUtils.getLiteralExpression(arr[rowIdx]));
+    }
+    return expressions;
+  }
+
+  private static List<Expression> computeInOperandsForString(List<Object[]> dataContainer, int colIdx, int numRows) {
+    String[] arrString = new String[numRows];
+    for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
+      arrString[rowIdx] = (String) dataContainer.get(rowIdx)[colIdx];
+    }
+    Arrays.sort(arrString);
+    List<Expression> expressions = new ArrayList<>();
+    for (int rowIdx = 0; rowIdx < numRows; rowIdx++) {
+      expressions.add(RequestUtils.getLiteralExpression(arrString[rowIdx]));
+    }
+    return expressions;
+  }
+
+  private interface DataExtractor {
+    Number extractData(Object[] row, int colIdx);
+  }
+//Refactoring end

@@ -135,41 +135,56 @@ public class ReceivingMailbox {
           : ReceivingMailboxStatus.ERROR;
     }
     if (timeoutMs <= 0) {
-      LOGGER.debug("Mailbox: {} is already timed out", _id);
-      setErrorBlock(TransferableBlockUtils.getErrorTransferableBlock(
-          new TimeoutException("Timed out while offering data to mailbox: " + _id)));
+      handleTimeout();
       return ReceivingMailboxStatus.TIMEOUT;
     }
     try {
-      long now = System.currentTimeMillis();
-      boolean accepted = _blocks.offer(block, timeoutMs, TimeUnit.MILLISECONDS);
-      _stats.merge(StatKey.OFFER_CPU_TIME_MS, System.currentTimeMillis() - now);
-      if (accepted) {
-        errorBlock = _errorBlock.get();
-        if (errorBlock == null) {
-          if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("==[MAILBOX]== Block " + block + " ready to read from mailbox: " + _id);
-          }
-          notifyReader();
-          return _isEarlyTerminated ? ReceivingMailboxStatus.EARLY_TERMINATED : ReceivingMailboxStatus.SUCCESS;
-        } else {
-          LOGGER.debug("Mailbox: {} is already cancelled or errored out, ignoring the late block", _id);
-          _blocks.clear();
-          return errorBlock == CANCELLED_ERROR_BLOCK ? ReceivingMailboxStatus.CANCELLED
-              : ReceivingMailboxStatus.ERROR;
-        }
-      } else {
-        LOGGER.debug("Failed to offer block into mailbox: {} within: {}ms", _id, timeoutMs);
-        setErrorBlock(TransferableBlockUtils.getErrorTransferableBlock(
-            new TimeoutException("Timed out while waiting for receive operator to consume data from mailbox: " + _id)));
-        return ReceivingMailboxStatus.TIMEOUT;
-      }
+      return tryOfferBlock(block, timeoutMs);
     } catch (InterruptedException e) {
       LOGGER.error("Interrupted while offering block into mailbox: {}", _id);
       setErrorBlock(TransferableBlockUtils.getErrorTransferableBlock(e));
       return ReceivingMailboxStatus.ERROR;
     }
   }
+  
+  private void handleTimeout() {
+    LOGGER.debug("Mailbox: {} is already timed out", _id);
+    setErrorBlock(TransferableBlockUtils.getErrorTransferableBlock(
+        new TimeoutException("Timed out while offering data to mailbox: " + _id)));
+  }
+
+  private ReceivingMailboxStatus tryOfferBlock(TransferableBlock block, long timeoutMs)
+      throws InterruptedException {
+    long now = System.currentTimeMillis();
+    boolean accepted = _blocks.offer(block, timeoutMs, TimeUnit.MILLISECONDS);
+    _stats.merge(StatKey.OFFER_CPU_TIME_MS, System.currentTimeMillis() - now);
+    if (accepted) {
+      return handleAcceptedBlock(block);
+    } else {
+      LOGGER.debug("Failed to offer block into mailbox: {} within: {}ms", _id, timeoutMs);
+      setErrorBlock(TransferableBlockUtils.getErrorTransferableBlock(
+          new TimeoutException("Timed out while waiting for receive operator to consume data from mailbox: " + _id)));
+      return ReceivingMailboxStatus.TIMEOUT;
+    }
+  }
+
+  private ReceivingMailboxStatus handleAcceptedBlock(TransferableBlock block) {
+    TransferableBlock errorBlock = _errorBlock.get();
+    if (errorBlock == null) {
+      if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("==[MAILBOX]== Block " + block + " ready to read from mailbox: " + _id);
+      }
+      notifyReader();
+      return _isEarlyTerminated ? ReceivingMailboxStatus.EARLY_TERMINATED : ReceivingMailboxStatus.SUCCESS;
+    } else {
+      LOGGER.debug("Mailbox: {} is already cancelled or errored out, ignoring the late block", _id);
+      _blocks.clear();
+      return errorBlock == CANCELLED_ERROR_BLOCK ? ReceivingMailboxStatus.CANCELLED
+          : ReceivingMailboxStatus.ERROR;
+    }
+  }
+
+//Refactoring end
 
   /**
    * Sets an error block into the mailbox. No more blocks are accepted after calling this method.

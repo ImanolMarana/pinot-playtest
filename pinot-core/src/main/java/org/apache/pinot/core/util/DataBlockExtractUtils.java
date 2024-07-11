@@ -547,79 +547,93 @@ public final class DataBlockExtractUtils {
       return values;
     }
     if (nullBitmap == null) {
-      switch (storedType) {
-        case INT:
-          for (int rowId = 0; rowId < numRows; rowId++) {
-            values[rowId] = BigDecimal.valueOf(dataBlock.getInt(rowId, colId));
-          }
-          break;
-        case LONG:
-          for (int rowId = 0; rowId < numRows; rowId++) {
-            values[rowId] = BigDecimal.valueOf(dataBlock.getLong(rowId, colId));
-          }
-          break;
-        case FLOAT:
-          for (int rowId = 0; rowId < numRows; rowId++) {
-            values[rowId] = BigDecimal.valueOf(dataBlock.getFloat(rowId, colId));
-          }
-          break;
-        case DOUBLE:
-          for (int rowId = 0; rowId < numRows; rowId++) {
-            values[rowId] = BigDecimal.valueOf(dataBlock.getDouble(rowId, colId));
-          }
-          break;
-        case BIG_DECIMAL:
-          for (int rowId = 0; rowId < numRows; rowId++) {
-            values[rowId] = dataBlock.getBigDecimal(rowId, colId);
-          }
-          break;
-        default:
-          throw new IllegalStateException(
-              String.format("Cannot extract BigDecimal values for column: %s with stored type: %s",
-                  dataBlock.getDataSchema().getColumnName(colId), storedType));
-      }
+      return extractBigDecimalColumnWithoutNulls(storedType, dataBlock, colId, numRows);
     } else {
-      switch (storedType) {
-        case INT:
-          for (int rowId = 0; rowId < numRows; rowId++) {
-            values[rowId] = !nullBitmap.contains(rowId) ? BigDecimal.valueOf(dataBlock.getInt(rowId, colId))
-                : NullValuePlaceHolder.BIG_DECIMAL;
-          }
-          break;
-        case LONG:
-          for (int rowId = 0; rowId < numRows; rowId++) {
-            values[rowId] = !nullBitmap.contains(rowId) ? BigDecimal.valueOf(dataBlock.getLong(rowId, colId))
-                : NullValuePlaceHolder.BIG_DECIMAL;
-          }
-          break;
-        case FLOAT:
-          for (int rowId = 0; rowId < numRows; rowId++) {
-            values[rowId] =
-                !nullBitmap.contains(rowId) ? new BigDecimal(Float.toString(dataBlock.getFloat(rowId, colId)))
-                    : NullValuePlaceHolder.BIG_DECIMAL;
-          }
-          break;
-        case DOUBLE:
-          for (int rowId = 0; rowId < numRows; rowId++) {
-            values[rowId] =
-                !nullBitmap.contains(rowId) ? new BigDecimal(Double.toString(dataBlock.getDouble(rowId, colId)))
-                    : NullValuePlaceHolder.BIG_DECIMAL;
-          }
-          break;
-        case BIG_DECIMAL:
-          for (int rowId = 0; rowId < numRows; rowId++) {
-            values[rowId] =
-                !nullBitmap.contains(rowId) ? dataBlock.getBigDecimal(rowId, colId) : NullValuePlaceHolder.BIG_DECIMAL;
-          }
-          break;
-        default:
-          throw new IllegalStateException(
-              String.format("Cannot extract BigDecimal values for column: %s with stored type: %s",
-                  dataBlock.getDataSchema().getColumnName(colId), storedType));
-      }
+      return extractBigDecimalColumnWithNulls(storedType, dataBlock, colId, numRows, nullBitmap);
+    }
+  }
+
+  private static BigDecimal[] extractBigDecimalColumnWithoutNulls(DataType storedType, DataBlock dataBlock, int colId,
+      int numRows) {
+    BigDecimal[] values = new BigDecimal[numRows];
+    switch (storedType) {
+      case INT:
+        for (int rowId = 0; rowId < numRows; rowId++) {
+          values[rowId] = BigDecimal.valueOf(dataBlock.getInt(rowId, colId));
+        }
+        break;
+      case LONG:
+        for (int rowId = 0; rowId < numRows; rowId++) {
+          values[rowId] = BigDecimal.valueOf(dataBlock.getLong(rowId, colId));
+        }
+        break;
+      case FLOAT:
+        for (int rowId = 0; rowId < numRows; rowId++) {
+          values[rowId] = BigDecimal.valueOf(dataBlock.getFloat(rowId, colId));
+        }
+        break;
+      case DOUBLE:
+        for (int rowId = 0; rowId < numRows; rowId++) {
+          values[rowId] = BigDecimal.valueOf(dataBlock.getDouble(rowId, colId));
+        }
+        break;
+      case BIG_DECIMAL:
+        for (int rowId = 0; rowId < numRows; rowId++) {
+          values[rowId] = dataBlock.getBigDecimal(rowId, colId);
+        }
+        break;
+      default:
+        throw new IllegalStateException(
+            String.format("Cannot extract BigDecimal values for column: %s with stored type: %s",
+                dataBlock.getDataSchema().getColumnName(colId), storedType));
     }
     return values;
   }
+
+  private static BigDecimal[] extractBigDecimalColumnWithNulls(DataType storedType, DataBlock dataBlock, int colId,
+      int numRows, RoaringBitmap nullBitmap) {
+    BigDecimal[] values = new BigDecimal[numRows];
+    switch (storedType) {
+      case INT:
+        for (int rowId = 0; rowId < numRows; rowId++) {
+          values[rowId] = !nullBitmap.contains(rowId) ? BigDecimal.valueOf(dataBlock.getInt(rowId, colId))
+              : NullValuePlaceHolder.BIG_DECIMAL;
+        }
+        break;
+      case LONG:
+        for (int rowId = 0; rowId < numRows; rowId++) {
+          values[rowId] = !nullBitmap.contains(rowId) ? BigDecimal.valueOf(dataBlock.getLong(rowId, colId))
+              : NullValuePlaceHolder.BIG_DECIMAL;
+        }
+        break;
+      case FLOAT:
+        for (int rowId = 0; rowId < numRows; rowId++) {
+          values[rowId] =
+              !nullBitmap.contains(rowId) ? new BigDecimal(Float.toString(dataBlock.getFloat(rowId, colId)))
+                  : NullValuePlaceHolder.BIG_DECIMAL;
+        }
+        break;
+      case DOUBLE:
+        for (int rowId = 0; rowId < numRows; rowId++) {
+          values[rowId] =
+              !nullBitmap.contains(rowId) ? new BigDecimal(Double.toString(dataBlock.getDouble(rowId, colId)))
+                  : NullValuePlaceHolder.BIG_DECIMAL;
+        }
+        break;
+      case BIG_DECIMAL:
+        for (int rowId = 0; rowId < numRows; rowId++) {
+          values[rowId] =
+              !nullBitmap.contains(rowId) ? dataBlock.getBigDecimal(rowId, colId) : NullValuePlaceHolder.BIG_DECIMAL;
+        }
+        break;
+      default:
+        throw new IllegalStateException(
+            String.format("Cannot extract BigDecimal values for column: %s with stored type: %s",
+                dataBlock.getDataSchema().getColumnName(colId), storedType));
+    }
+    return values;
+  }
+//Refactoring end
 
   public static String[] extractStringColumn(DataType storedType, DataBlock dataBlock, int colId,
       @Nullable RoaringBitmap nullBitmap) {

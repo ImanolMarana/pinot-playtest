@@ -91,89 +91,96 @@ public class PinotSegmentColumnReader implements Closeable {
 
   public Object getValue(int docId) {
     if (_dictionary != null) {
-      // Dictionary based
-      if (_forwardIndexReader.isSingleValue()) {
-        return _dictionary.get(_forwardIndexReader.getDictId(docId, _forwardIndexReaderContext));
-      } else {
-        int numValues = _forwardIndexReader.getDictIdMV(docId, _dictIdBuffer, _forwardIndexReaderContext);
-        DataType storedType = _dictionary.getValueType();
-        switch (storedType) {
-          case INT: {
-            Integer[] values = new Integer[numValues];
-            _dictionary.readIntValues(_dictIdBuffer, numValues, values);
-            return values;
-          }
-          case LONG: {
-            Long[] values = new Long[numValues];
-            _dictionary.readLongValues(_dictIdBuffer, numValues, values);
-            return values;
-          }
-          case FLOAT: {
-            Float[] values = new Float[numValues];
-            _dictionary.readFloatValues(_dictIdBuffer, numValues, values);
-            return values;
-          }
-          case DOUBLE: {
-            Double[] values = new Double[numValues];
-            _dictionary.readDoubleValues(_dictIdBuffer, numValues, values);
-            return values;
-          }
-          case STRING: {
-            String[] values = new String[numValues];
-            _dictionary.readStringValues(_dictIdBuffer, numValues, values);
-            return values;
-          }
-          case BYTES: {
-            byte[][] values = new byte[numValues][];
-            _dictionary.readBytesValues(_dictIdBuffer, numValues, values);
-            return values;
-          }
-          default:
-            throw new IllegalStateException("Unsupported MV type: " + storedType);
-        }
-      }
+      return getDictionaryEncodedValue(docId);
     } else {
-      // Raw index based
-      DataType storedType = _forwardIndexReader.getStoredType();
-      if (_forwardIndexReader.isSingleValue()) {
-        switch (storedType) {
-          case INT:
-            return _forwardIndexReader.getInt(docId, _forwardIndexReaderContext);
-          case LONG:
-            return _forwardIndexReader.getLong(docId, _forwardIndexReaderContext);
-          case FLOAT:
-            return _forwardIndexReader.getFloat(docId, _forwardIndexReaderContext);
-          case DOUBLE:
-            return _forwardIndexReader.getDouble(docId, _forwardIndexReaderContext);
-          case BIG_DECIMAL:
-            return _forwardIndexReader.getBigDecimal(docId, _forwardIndexReaderContext);
-          case STRING:
-            return _forwardIndexReader.getString(docId, _forwardIndexReaderContext);
-          case BYTES:
-            return _forwardIndexReader.getBytes(docId, _forwardIndexReaderContext);
-          default:
-            throw new IllegalStateException("Unsupported SV type: " + storedType);
+      return getRawValue(docId);
+    }
+  }
+
+  private Object getDictionaryEncodedValue(int docId) {
+    if (_forwardIndexReader.isSingleValue()) {
+      return _dictionary.get(_forwardIndexReader.getDictId(docId, _forwardIndexReaderContext));
+    } else {
+      int numValues = _forwardIndexReader.getDictIdMV(docId, _dictIdBuffer, _forwardIndexReaderContext);
+      DataType storedType = _dictionary.getValueType();
+      switch (storedType) {
+        case INT: {
+          Integer[] values = new Integer[numValues];
+          _dictionary.readIntValues(_dictIdBuffer, numValues, values);
+          return values;
         }
-      } else {
-        switch (storedType) {
-          case INT:
-            return ArrayUtils.toObject(_forwardIndexReader.getIntMV(docId, _forwardIndexReaderContext));
-          case LONG:
-            return ArrayUtils.toObject(_forwardIndexReader.getLongMV(docId, _forwardIndexReaderContext));
-          case FLOAT:
-            return ArrayUtils.toObject(_forwardIndexReader.getFloatMV(docId, _forwardIndexReaderContext));
-          case DOUBLE:
-            return ArrayUtils.toObject(_forwardIndexReader.getDoubleMV(docId, _forwardIndexReaderContext));
-          case STRING:
-            return _forwardIndexReader.getStringMV(docId, _forwardIndexReaderContext);
-          case BYTES:
-            return _forwardIndexReader.getBytesMV(docId, _forwardIndexReaderContext);
-          default:
-            throw new IllegalStateException("Unsupported MV type: " + storedType);
+        case LONG: {
+          Long[] values = new Long[numValues];
+          _dictionary.readLongValues(_dictIdBuffer, numValues, values);
+          return values;
         }
+        case FLOAT: {
+          Float[] values = new Float[numValues];
+          _dictionary.readFloatValues(_dictIdBuffer, numValues, values);
+          return values;
+        }
+        case DOUBLE: {
+          Double[] values = new Double[numValues];
+          _dictionary.readDoubleValues(_dictIdBuffer, numValues, values);
+          return values;
+        }
+        case STRING: {
+          String[] values = new String[numValues];
+          _dictionary.readStringValues(_dictIdBuffer, numValues, values);
+          return values;
+        }
+        case BYTES: {
+          byte[][] values = new byte[numValues][];
+          _dictionary.readBytesValues(_dictIdBuffer, numValues, values);
+          return values;
+        }
+        default:
+          throw new IllegalStateException("Unsupported MV type: " + storedType);
       }
     }
   }
+
+  private Object getRawValue(int docId) {
+    DataType storedType = _forwardIndexReader.getStoredType();
+    if (_forwardIndexReader.isSingleValue()) {
+      switch (storedType) {
+        case INT:
+          return _forwardIndexReader.getInt(docId, _forwardIndexReaderContext);
+        case LONG:
+          return _forwardIndexReader.getLong(docId, _forwardIndexReaderContext);
+        case FLOAT:
+          return _forwardIndexReader.getFloat(docId, _forwardIndexReaderContext);
+        case DOUBLE:
+          return _forwardIndexReader.getDouble(docId, _forwardIndexReaderContext);
+        case BIG_DECIMAL:
+          return _forwardIndexReader.getBigDecimal(docId, _forwardIndexReaderContext);
+        case STRING:
+          return _forwardIndexReader.getString(docId, _forwardIndexReaderContext);
+        case BYTES:
+          return _forwardIndexReader.getBytes(docId, _forwardIndexReaderContext);
+        default:
+          throw new IllegalStateException("Unsupported SV type: " + storedType);
+      }
+    } else {
+      switch (storedType) {
+        case INT:
+          return ArrayUtils.toObject(_forwardIndexReader.getIntMV(docId, _forwardIndexReaderContext));
+        case LONG:
+          return ArrayUtils.toObject(_forwardIndexReader.getLongMV(docId, _forwardIndexReaderContext));
+        case FLOAT:
+          return ArrayUtils.toObject(_forwardIndexReader.getFloatMV(docId, _forwardIndexReaderContext));
+        case DOUBLE:
+          return ArrayUtils.toObject(_forwardIndexReader.getDoubleMV(docId, _forwardIndexReaderContext));
+        case STRING:
+          return _forwardIndexReader.getStringMV(docId, _forwardIndexReaderContext);
+        case BYTES:
+          return _forwardIndexReader.getBytesMV(docId, _forwardIndexReaderContext);
+        default:
+          throw new IllegalStateException("Unsupported MV type: " + storedType);
+      }
+    }
+  }
+//Refactoring end
 
   public boolean isNull(int docId) {
     return _nullValueVectorReader != null && _nullValueVectorReader.isNull(docId);

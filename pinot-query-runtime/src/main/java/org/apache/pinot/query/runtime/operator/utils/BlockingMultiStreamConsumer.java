@@ -122,38 +122,89 @@ public abstract class BlockingMultiStreamConsumer<E> implements AutoCloseable {
       LOGGER.trace("==[RECEIVE]== Enter getNextBlock from: " + _id + " mailboxSize: " + _mailboxes.size());
     }
     // Standard optimistic execution. First we try to read without acquiring the lock.
-    E block = readDroppingSuccessEos();
+    E block = readBlockDroppingSuccessEos();
     if (block != null) {
       return block;
     }
     try {
-      boolean timeout;
-      while (true) { // we didn't find a mailbox ready to read, so we need to be pessimistic
-        if (LOGGER.isDebugEnabled()) {
-          LOGGER.debug("==[RECEIVE]== Blocked on : " + _id + ". " + System.identityHashCode(_newDataReady));
-        }
-        long timeoutMs = _deadlineMs - System.currentTimeMillis();
-        timeout = _newDataReady.poll(timeoutMs, TimeUnit.MILLISECONDS) == null;
-        if (timeout) {
-          if (LOGGER.isDebugEnabled()) {
-            LOGGER.warn("==[RECEIVE]== Timeout on: " + _id);
-          }
-          _errorBlock = onTimeout();
-          return _errorBlock;
-        }
-        LOGGER.debug("==[RECEIVE]== More data available. Trying to read again");
-        block = readDroppingSuccessEos();
-        if (block != null) {
-          if (LOGGER.isTraceEnabled()) {
-            LOGGER.trace("==[RECEIVE]== Ready to emit on: " + _id);
-          }
-          return block;
-        }
-      }
+      return waitForAndReadBlock();
     } catch (InterruptedException ex) {
       return onException(ex);
     }
   }
+
+  private E waitForAndReadBlock() throws InterruptedException {
+    E block;
+    while (true) { // we didn't find a mailbox ready to read, so we need to be pessimistic
+      if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("==[RECEIVE]== Blocked on : " + _id + ". " + System.identityHashCode(_newDataReady));
+      }
+      if (isTimeout()) {
+        if (LOGGER.isDebugEnabled()) {
+          LOGGER.warn("==[RECEIVE]== Timeout on: " + _id);
+        }
+        _errorBlock = onTimeout();
+        return _errorBlock;
+      }
+      LOGGER.debug("==[RECEIVE]== More data available. Trying to read again");
+      block = readBlockDroppingSuccessEos();
+      if (block != null) {
+        if (LOGGER.isTraceEnabled()) {
+          LOGGER.trace("==[RECEIVE]== Ready to emit on: " + _id);
+        }
+        return block;
+      }
+    }
+  }
+
+  private boolean isTimeout() throws InterruptedException {
+    long timeoutMs = _deadlineMs - System.currentTimeMillis();
+    return _newDataReady.poll(timeoutMs, TimeUnit.MILLISECONDS) == null;
+  }
+
+  @Nullable
+  private E readBlockDroppingSuccessEos() {
+    if (System.currentTimeMillis() > _deadlineMs) {
+      _errorBlock = onTimeout();
+      return _errorBlock;
+    }
+
+    E block = readBlockOrNull();
+    while (block != null && isEos(block)) {
+      // we have read an EOS
+      assert !_mailboxes.isEmpty() : "readBlockOrNull should return null when there are no mailboxes";
+      AsyncStream<E> removed = _mailboxes.remove(_lastRead);
+      // this is done in order to keep the invariant.
+      _lastRead--;
+      if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("==[RECEIVE]== EOS received : " + _id + " in mailbox: " + removed.getId()
+            + " (" + _mailboxes.size() + " mailboxes alive)");
+      }
+      onConsumerFinish(block);
+
+      block = readBlockOrNull();
+    }
+    if (_mailboxes.isEmpty()) {
+      if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("==[RECEIVE]== Finished : " + _id);
+      }
+      return onEos();
+    }
+    if (block != null) {
+      if (LOGGER.isTraceEnabled()) {
+        AsyncStream<E> mailbox = _mailboxes.get(_lastRead);
+        LOGGER.trace("==[RECEIVE]== Returned block from : " + _id + " in mailbox: " + mailbox.getId());
+      }
+      if (isError(block)) {
+        AsyncStream<E> mailbox = _mailboxes.get(_lastRead);
+        LOGGER.info("==[RECEIVE]== Error block found from : " + _id + " in mailbox " + mailbox.getId());
+        _errorBlock = block;
+      }
+    }
+    return block;
+  }
+
+  //Refactoring end
 
   /**
    * This is a utility method that reads tries to read from the different mailboxes in a circular manner.

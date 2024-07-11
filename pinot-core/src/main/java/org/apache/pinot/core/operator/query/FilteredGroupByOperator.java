@@ -116,59 +116,69 @@ public class FilteredGroupByOperator extends BaseOperator<GroupByResultsBlock> {
 
     GroupKeyGenerator groupKeyGenerator = null;
     for (AggregationInfo aggregationInfo : _aggregationInfos) {
-      AggregationFunction[] aggregationFunctions = aggregationInfo.getFunctions();
-      BaseProjectOperator<?> projectOperator = aggregationInfo.getProjectOperator();
-
-      // Perform aggregation group-by on all the blocks
-      DefaultGroupByExecutor groupByExecutor;
-      if (groupKeyGenerator == null) {
-        // The group key generator should be shared across all AggregationFunctions so that agg results can be
-        // aligned. Given that filtered aggregations are stored as an iterable of iterables so that all filtered aggs
-        // with the same filter can share transform blocks, rather than a singular flat iterable in the case where
-        // aggs are all non-filtered, sharing a GroupKeyGenerator across all aggs cannot be accomplished by allowing
-        // the GroupByExecutor to have sole ownership of the GroupKeyGenerator. Therefore, we allow constructing a
-        // GroupByExecutor with a pre-existing GroupKeyGenerator so that the GroupKeyGenerator can be shared across
-        // loop iterations i.e. across all aggs.
-        if (aggregationInfo.isUseStarTree()) {
-          groupByExecutor =
-              new StarTreeGroupByExecutor(_queryContext, aggregationFunctions, _groupByExpressions, projectOperator);
-        } else {
-          groupByExecutor =
-              new DefaultGroupByExecutor(_queryContext, aggregationFunctions, _groupByExpressions, projectOperator);
-        }
-        groupKeyGenerator = groupByExecutor.getGroupKeyGenerator();
-      } else {
-        if (aggregationInfo.isUseStarTree()) {
-          groupByExecutor =
-              new StarTreeGroupByExecutor(_queryContext, aggregationFunctions, _groupByExpressions, projectOperator,
-                  groupKeyGenerator);
-        } else {
-          groupByExecutor =
-              new DefaultGroupByExecutor(_queryContext, aggregationFunctions, _groupByExpressions, projectOperator,
-                  groupKeyGenerator);
-        }
-      }
-
-      int numDocsScanned = 0;
-      ValueBlock valueBlock;
-      while ((valueBlock = projectOperator.nextBlock()) != null) {
-        numDocsScanned += valueBlock.getNumDocs();
-        groupByExecutor.process(valueBlock);
-      }
-
-      _numDocsScanned += numDocsScanned;
-      _numEntriesScannedInFilter += projectOperator.getExecutionStatistics().getNumEntriesScannedInFilter();
-      _numEntriesScannedPostFilter += (long) numDocsScanned * projectOperator.getNumColumnsProjected();
-      GroupByResultHolder[] filterGroupByResults = groupByExecutor.getGroupByResultHolders();
-      for (int i = 0; i < aggregationFunctions.length; i++) {
-        groupByResultHolders[resultHolderIndexMap.get(aggregationFunctions[i])] = filterGroupByResults[i];
-      }
+      groupKeyGenerator = processAggregationInfo(aggregationInfo, groupKeyGenerator, groupByResultHolders,
+          resultHolderIndexMap);
     }
+
     assert groupKeyGenerator != null;
     for (GroupByResultHolder groupByResultHolder : groupByResultHolders) {
       groupByResultHolder.ensureCapacity(groupKeyGenerator.getNumKeys());
     }
 
+    return generateGroupByResultsBlock(groupKeyGenerator, groupByResultHolders);
+  }
+
+  private GroupKeyGenerator processAggregationInfo(AggregationInfo aggregationInfo,
+      GroupKeyGenerator groupKeyGenerator, GroupByResultHolder[] groupByResultHolders,
+      IdentityHashMap<AggregationFunction, Integer> resultHolderIndexMap) {
+    AggregationFunction[] aggregationFunctions = aggregationInfo.getFunctions();
+    BaseProjectOperator<?> projectOperator = aggregationInfo.getProjectOperator();
+
+    DefaultGroupByExecutor groupByExecutor = createGroupByExecutor(aggregationInfo, groupKeyGenerator,
+        aggregationFunctions, projectOperator);
+    groupKeyGenerator = groupByExecutor.getGroupKeyGenerator();
+
+    int numDocsScanned = 0;
+    ValueBlock valueBlock;
+    while ((valueBlock = projectOperator.nextBlock()) != null) {
+      numDocsScanned += valueBlock.getNumDocs();
+      groupByExecutor.process(valueBlock);
+    }
+
+    _numDocsScanned += numDocsScanned;
+    _numEntriesScannedInFilter += projectOperator.getExecutionStatistics().getNumEntriesScannedInFilter();
+    _numEntriesScannedPostFilter += (long) numDocsScanned * projectOperator.getNumColumnsProjected();
+    GroupByResultHolder[] filterGroupByResults = groupByExecutor.getGroupByResultHolders();
+    for (int i = 0; i < aggregationFunctions.length; i++) {
+      groupByResultHolders[resultHolderIndexMap.get(aggregationFunctions[i])] = filterGroupByResults[i];
+    }
+    return groupKeyGenerator;
+  }
+
+  private DefaultGroupByExecutor createGroupByExecutor(AggregationInfo aggregationInfo,
+      GroupKeyGenerator groupKeyGenerator, AggregationFunction[] aggregationFunctions,
+      BaseProjectOperator<?> projectOperator) {
+    if (groupKeyGenerator == null) {
+      if (aggregationInfo.isUseStarTree()) {
+        return new StarTreeGroupByExecutor(_queryContext, aggregationFunctions, _groupByExpressions,
+            projectOperator);
+      } else {
+        return new DefaultGroupByExecutor(_queryContext, aggregationFunctions, _groupByExpressions,
+            projectOperator);
+      }
+    } else {
+      if (aggregationInfo.isUseStarTree()) {
+        return new StarTreeGroupByExecutor(_queryContext, aggregationFunctions, _groupByExpressions,
+            projectOperator, groupKeyGenerator);
+      } else {
+        return new DefaultGroupByExecutor(_queryContext, aggregationFunctions, _groupByExpressions,
+            projectOperator, groupKeyGenerator);
+      }
+    }
+  }
+
+  private GroupByResultsBlock generateGroupByResultsBlock(GroupKeyGenerator groupKeyGenerator,
+      GroupByResultHolder[] groupByResultHolders) {
     // Check if the groups limit is reached
     boolean numGroupsLimitReached = groupKeyGenerator.getNumKeys() >= _queryContext.getNumGroupsLimit();
     Tracing.activeRecording().setNumGroups(_queryContext.getNumGroupsLimit(), groupKeyGenerator.getNumKeys());
@@ -197,6 +207,8 @@ public class FilteredGroupByOperator extends BaseOperator<GroupByResultsBlock> {
     GroupByResultsBlock resultsBlock = new GroupByResultsBlock(_dataSchema, aggGroupByResult, _queryContext);
     resultsBlock.setNumGroupsLimitReached(numGroupsLimitReached);
     return resultsBlock;
+  }
+//Refactoring end
   }
 
   @Override

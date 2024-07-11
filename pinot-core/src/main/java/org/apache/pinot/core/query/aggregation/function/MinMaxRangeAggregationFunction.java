@@ -124,30 +124,42 @@ public class MinMaxRangeAggregationFunction extends NullableSingleInputAggregati
       Map<ExpressionContext, BlockValSet> blockValSetMap) {
     BlockValSet blockValSet = blockValSetMap.get(_expression);
     if (blockValSet.getValueType() != DataType.BYTES) {
-      double[] doubleValues = blockValSet.getDoubleValuesSV();
-      forEachNotNull(length, blockValSet, (from, to) -> {
-        for (int i = from; i < to; i++) {
-          double value = doubleValues[i];
-          for (int groupKey : groupKeysArray[i]) {
-            setGroupByResult(groupKey, groupByResultHolder, value, value);
-          }
-        }
-      });
+      aggregateGroupByMVForDoubleValues(length, groupKeysArray, groupByResultHolder, blockValSet);
     } else {
       // Serialized MinMaxRangePair
-      byte[][] bytesValues = blockValSet.getBytesValuesSV();
-      forEachNotNull(length, blockValSet, (from, to) -> {
-        for (int i = from; i < to; i++) {
-          MinMaxRangePair minMaxRangePair = ObjectSerDeUtils.MIN_MAX_RANGE_PAIR_SER_DE.deserialize(bytesValues[i]);
-          double min = minMaxRangePair.getMin();
-          double max = minMaxRangePair.getMax();
-          for (int groupKey : groupKeysArray[i]) {
-            setGroupByResult(groupKey, groupByResultHolder, min, max);
-          }
-        }
-      });
+      aggregateGroupByMVForBytesValues(length, groupKeysArray, groupByResultHolder, blockValSet);
     }
   }
+
+  private void aggregateGroupByMVForDoubleValues(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    double[] doubleValues = blockValSet.getDoubleValuesSV();
+    forEachNotNull(length, blockValSet, (from, to) -> {
+      for (int i = from; i < to; i++) {
+        double value = doubleValues[i];
+        for (int groupKey : groupKeysArray[i]) {
+          setGroupByResult(groupKey, groupByResultHolder, value, value);
+        }
+      }
+    });
+  }
+
+  private void aggregateGroupByMVForBytesValues(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    byte[][] bytesValues = blockValSet.getBytesValuesSV();
+    forEachNotNull(length, blockValSet, (from, to) -> {
+      for (int i = from; i < to; i++) {
+        MinMaxRangePair minMaxRangePair = ObjectSerDeUtils.MIN_MAX_RANGE_PAIR_SER_DE.deserialize(bytesValues[i]);
+        double min = minMaxRangePair.getMin();
+        double max = minMaxRangePair.getMax();
+        for (int groupKey : groupKeysArray[i]) {
+          setGroupByResult(groupKey, groupByResultHolder, min, max);
+        }
+      }
+    });
+  }
+
+//Refactoring end
 
   protected void setGroupByResult(int groupKey, GroupByResultHolder groupByResultHolder, double min, double max) {
     MinMaxRangePair minMaxRangePair = groupByResultHolder.getResult(groupKey);

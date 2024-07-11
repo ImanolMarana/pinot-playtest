@@ -76,34 +76,47 @@ abstract class BaseRawStringSingleColumnDistinctExecutor implements DistinctExec
     BlockValSet blockValueSet = valueBlock.getBlockValueSet(_expression);
     int numDocs = valueBlock.getNumDocs();
     if (blockValueSet.isSingleValue()) {
-      String[] values = blockValueSet.getStringValuesSV();
-      if (_nullHandlingEnabled) {
-        RoaringBitmap nullBitmap = blockValueSet.getNullBitmap();
-        for (int i = 0; i < numDocs; i++) {
-          if (nullBitmap != null && nullBitmap.contains(i)) {
-            _hasNull = true;
-          } else if (add(values[i])) {
-            return true;
-          }
-        }
-      } else {
-        for (int i = 0; i < numDocs; i++) {
-          if (add(values[i])) {
-            return true;
-          }
+      return processSingleValue(blockValueSet, numDocs);
+    } else {
+      return processMultiValue(blockValueSet, numDocs);
+    }
+  }
+
+  private boolean processSingleValue(BlockValSet blockValueSet, int numDocs) {
+    String[] values = blockValueSet.getStringValuesSV();
+    if (_nullHandlingEnabled) {
+      RoaringBitmap nullBitmap = blockValueSet.getNullBitmap();
+      for (int i = 0; i < numDocs; i++) {
+        if (nullBitmap != null && nullBitmap.contains(i)) {
+          _hasNull = true;
+        } else if (add(values[i])) {
+          return true;
         }
       }
     } else {
-      String[][] values = blockValueSet.getStringValuesMV();
       for (int i = 0; i < numDocs; i++) {
-        for (String value : values[i]) {
-          if (add(value)) {
-            return true;
-          }
+        if (add(values[i])) {
+          return true;
         }
       }
     }
     return false;
+  }
+
+  private boolean processMultiValue(BlockValSet blockValueSet, int numDocs) {
+    String[][] values = blockValueSet.getStringValuesMV();
+    for (int i = 0; i < numDocs; i++) {
+      for (String value : values[i]) {
+        if (add(value)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  protected abstract boolean add(String val);
+//Refactoring end
   }
 
   protected abstract boolean add(String val);

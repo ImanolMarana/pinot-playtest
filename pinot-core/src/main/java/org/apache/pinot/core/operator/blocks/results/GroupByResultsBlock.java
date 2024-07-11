@@ -178,50 +178,79 @@ public class GroupByResultsBlock extends BaseResultsBlock {
     if (_table == null) {
       return dataTableBuilder.build();
     }
-    ColumnDataType[] storedColumnDataTypes = _dataSchema.getStoredColumnDataTypes();
-    int numColumns = _dataSchema.size();
     Iterator<Record> iterator = _table.iterator();
     int numRowsAdded = 0;
     if (_queryContext.isNullHandlingEnabled()) {
-      RoaringBitmap[] nullBitmaps = new RoaringBitmap[numColumns];
-      Object[] nullPlaceholders = new Object[numColumns];
-      for (int colId = 0; colId < numColumns; colId++) {
-        nullBitmaps[colId] = new RoaringBitmap();
-        nullPlaceholders[colId] = storedColumnDataTypes[colId].getNullPlaceholder();
-      }
-      int rowId = 0;
-      while (iterator.hasNext()) {
-        Tracing.ThreadAccountantOps.sampleAndCheckInterruptionPeriodically(numRowsAdded);
-        dataTableBuilder.startRow();
-        Object[] values = iterator.next().getValues();
-        for (int colId = 0; colId < numColumns; colId++) {
-          Object value = values[colId];
-          if (value == null && storedColumnDataTypes[colId] != ColumnDataType.OBJECT) {
-            value = nullPlaceholders[colId];
-            nullBitmaps[colId].add(rowId);
-          }
-          setDataTableColumn(storedColumnDataTypes[colId], dataTableBuilder, colId, value);
-        }
-        dataTableBuilder.finishRow();
-        numRowsAdded++;
-        rowId++;
-      }
-      for (RoaringBitmap nullBitmap : nullBitmaps) {
-        dataTableBuilder.setNullRowIds(nullBitmap);
-      }
+      numRowsAdded = populateDataTableWithNullHandling(dataTableBuilder, numRowsAdded, iterator);
     } else {
-      while (iterator.hasNext()) {
-        Tracing.ThreadAccountantOps.sampleAndCheckInterruptionPeriodically(numRowsAdded);
-        dataTableBuilder.startRow();
-        Object[] values = iterator.next().getValues();
-        for (int colId = 0; colId < numColumns; colId++) {
-          setDataTableColumn(storedColumnDataTypes[colId], dataTableBuilder, colId, values[colId]);
-        }
-        dataTableBuilder.finishRow();
-        numRowsAdded++;
-      }
+      numRowsAdded = populateDataTableWithoutNullHandling(dataTableBuilder, numRowsAdded, iterator);
     }
     return dataTableBuilder.build();
+  }
+
+  private int populateDataTableWithNullHandling(DataTableBuilder dataTableBuilder, int numRowsAdded,
+      Iterator<Record> iterator)
+      throws IOException {
+    ColumnDataType[] storedColumnDataTypes = _dataSchema.getStoredColumnDataTypes();
+    int numColumns = _dataSchema.size();
+    RoaringBitmap[] nullBitmaps = new RoaringBitmap[numColumns];
+    Object[] nullPlaceholders = new Object[numColumns];
+    for (int colId = 0; colId < numColumns; colId++) {
+      nullBitmaps[colId] = new RoaringBitmap();
+      nullPlaceholders[colId] = storedColumnDataTypes[colId].getNullPlaceholder();
+    }
+    int rowId = 0;
+    while (iterator.hasNext()) {
+      Tracing.ThreadAccountantOps.sampleAndCheckInterruptionPeriodically(numRowsAdded);
+      dataTableBuilder.startRow();
+      Object[] values = iterator.next().getValues();
+      numRowsAdded = processRowWithNullHandling(dataTableBuilder, numRowsAdded, storedColumnDataTypes,
+          nullBitmaps, nullPlaceholders, rowId, values);
+      rowId++;
+    }
+    for (RoaringBitmap nullBitmap : nullBitmaps) {
+      dataTableBuilder.setNullRowIds(nullBitmap);
+    }
+    return numRowsAdded;
+  }
+
+  private int populateDataTableWithoutNullHandling(DataTableBuilder dataTableBuilder, int numRowsAdded,
+      Iterator<Record> iterator)
+      throws IOException {
+    ColumnDataType[] storedColumnDataTypes = _dataSchema.getStoredColumnDataTypes();
+    int numColumns = _dataSchema.size();
+    while (iterator.hasNext()) {
+      Tracing.ThreadAccountantOps.sampleAndCheckInterruptionPeriodically(numRowsAdded);
+      dataTableBuilder.startRow();
+      Object[] values = iterator.next().getValues();
+      for (int colId = 0; colId < numColumns; colId++) {
+        setDataTableColumn(storedColumnDataTypes[colId], dataTableBuilder, colId, values[colId]);
+      }
+      dataTableBuilder.finishRow();
+      numRowsAdded++;
+    }
+    return numRowsAdded;
+  }
+
+  private int processRowWithNullHandling(DataTableBuilder dataTableBuilder, int numRowsAdded,
+      ColumnDataType[] storedColumnDataTypes, RoaringBitmap[] nullBitmaps, Object[] nullPlaceholders, int rowId,
+      Object[] values)
+      throws IOException {
+    int numColumns = _dataSchema.size();
+    for (int colId = 0; colId < numColumns; colId++) {
+      Object value = values[colId];
+      if (value == null && storedColumnDataTypes[colId] != ColumnDataType.OBJECT) {
+        value = nullPlaceholders[colId];
+        nullBitmaps[colId].add(rowId);
+      }
+      setDataTableColumn(storedColumnDataTypes[colId], dataTableBuilder, colId, value);
+    }
+    dataTableBuilder.finishRow();
+    numRowsAdded++;
+    return numRowsAdded;
+  }
+
+//Refactoring end
   }
 
   private void setDataTableColumn(ColumnDataType storedColumnDataType, DataTableBuilder dataTableBuilder,

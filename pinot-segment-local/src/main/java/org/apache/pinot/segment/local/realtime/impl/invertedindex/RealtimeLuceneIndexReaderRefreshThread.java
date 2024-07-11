@@ -66,88 +66,73 @@ public class RealtimeLuceneIndexReaderRefreshThread implements Runnable {
 
   @Override
   public void run() {
-    while (!_stopped) {
-      _mutex.lock();
-      try {
-        // During instantiation of a given MutableSegmentImpl, we will signal on this condition variable once
-        // one or more realtime lucene readers (one per column) belonging to the MutableSegment
-        // are added to the global queue managed by this thread. The thread that signals will
-        // grab this mutex and signal on the condition variable.
-        //
-        // This refresh thread will be woken up (and grab the mutex automatically as per the
-        // implementation of await) and check if the queue is non-empty. It will then proceed to
-        // poll the queue and refresh the realtime index readers for the polled segment.
-        //
-        // The mutex and condition-variable semantics take care of the scenario when on
-        // a given Pinot server, there is no realtime segment with text index enabled. In such
-        // cases, there is no need for this thread to wake up simply after every few seconds/minutes
-        // only to find that there is nothing to be refreshed. The thread should simply be
-        // off CPU until signalled specifically. This also covers the situation where initially
-        // there were few realtime segments of a table with text index. Later if they got
-        // moved to another server as part of rebalance, then again there is no need for this thread
-        // to do anything until some realtime segment is created with text index enabled.
-        while (_luceneRealtimeReaders.isEmpty()) {
-          _conditionVariable.await();
+        while (!_stopped) {
+          waitForSegmentReaders();
+          if (_stopped) {
+            break;
+          }
+          refreshSegmentReaders();
+          sleepBetweenCycles();
         }
-      } catch (InterruptedException e) {
-        LOGGER.warn("Realtime lucene reader refresh thread got interrupted while waiting on condition variable: ", e);
-        Thread.currentThread().interrupt();
-      } finally {
-        _mutex.unlock();
       }
-
-      // check if shutdown has been initiated
-      if (_stopped) {
-        // exit
-        break;
-      }
-
-      // remove the realtime segment from the front of queue
-      RealtimeLuceneIndexRefreshState.RealtimeLuceneReaders realtimeReadersForSegment = _luceneRealtimeReaders.poll();
-      if (realtimeReadersForSegment != null) {
-        String segmentName = realtimeReadersForSegment.getSegmentName();
-        // take the lock to prevent the realtime segment from being concurrently destroyed
-        // and thus closing the realtime readers while this thread attempts to refresh them
-        realtimeReadersForSegment.getLock().lock();
+    
+      private void waitForSegmentReaders() {
+        _mutex.lock();
         try {
-          if (!realtimeReadersForSegment.isSegmentDestroyed()) {
-            // if the segment hasn't yet been destroyed, refresh each
-            // realtime reader (one per column with text index enabled)
-            // for this segment.
-            List<RealtimeLuceneTextIndex> realtimeLuceneReaders =
-                realtimeReadersForSegment.getRealtimeLuceneReaders();
-            for (RealtimeLuceneTextIndex realtimeReader : realtimeLuceneReaders) {
-              if (_stopped) {
-                // exit
-                break;
-              }
-              SearcherManager searcherManager = realtimeReader.getSearcherManager();
-              try {
-                searcherManager.maybeRefresh();
-              } catch (Exception e) {
-                // we should never be here since the locking semantics between MutableSegmentImpl::destroy()
-                // and this code along with volatile state "isSegmentDestroyed" protect against the cases
-                // where this thread might attempt to refresh a realtime lucene reader after it has already
-                // been closed duing segment destroy.
-                LOGGER.warn("Caught exception {} while refreshing realtime lucene reader for segment: {}", e,
-                    segmentName);
-              }
-            }
+          while (_luceneRealtimeReaders.isEmpty()) {
+            _conditionVariable.await();
           }
+        } catch (InterruptedException e) {
+          LOGGER.warn("Realtime lucene reader refresh thread got interrupted while waiting on condition variable: ", e);
+          Thread.currentThread().interrupt();
         } finally {
-          if (!realtimeReadersForSegment.isSegmentDestroyed()) {
-            _luceneRealtimeReaders.offer(realtimeReadersForSegment);
-          }
-          realtimeReadersForSegment.getLock().unlock();
+          _mutex.unlock();
         }
       }
-
-      try {
-        Thread.sleep(DELAY_BETWEEN_SUCCESSIVE_EXECUTION_MS_DEFAULT);
-      } catch (Exception e) {
-        LOGGER.warn("Realtime lucene reader refresh thread got interrupted while sleeping: ", e);
-        Thread.currentThread().interrupt();
+    
+      private void refreshSegmentReaders() {
+        RealtimeLuceneIndexRefreshState.RealtimeLuceneReaders realtimeReadersForSegment = _luceneRealtimeReaders.poll();
+        if (realtimeReadersForSegment != null) {
+          String segmentName = realtimeReadersForSegment.getSegmentName();
+          realtimeReadersForSegment.getLock().lock();
+          try {
+            if (!realtimeReadersForSegment.isSegmentDestroyed()) {
+              refreshReadersForSegment(realtimeReadersForSegment, segmentName);
+            }
+          } finally {
+            if (!realtimeReadersForSegment.isSegmentDestroyed()) {
+              _luceneRealtimeReaders.offer(realtimeReadersForSegment);
+            }
+            realtimeReadersForSegment.getLock().unlock();
+          }
+        }
       }
-    } // end while
-  }
+    
+      private void refreshReadersForSegment(
+          RealtimeLuceneIndexRefreshState.RealtimeLuceneReaders realtimeReadersForSegment, String segmentName) {
+        List<RealtimeLuceneTextIndex> realtimeLuceneReaders =
+            realtimeReadersForSegment.getRealtimeLuceneReaders();
+        for (RealtimeLuceneTextIndex realtimeReader : realtimeLuceneReaders) {
+          if (_stopped) {
+            break;
+          }
+          SearcherManager searcherManager = realtimeReader.getSearcherManager();
+          try {
+            searcherManager.maybeRefresh();
+          } catch (Exception e) {
+            LOGGER.warn("Caught exception {} while refreshing realtime lucene reader for segment: {}", e,
+                segmentName);
+          }
+        }
+      }
+    
+      private void sleepBetweenCycles() {
+        try {
+          Thread.sleep(DELAY_BETWEEN_SUCCESSIVE_EXECUTION_MS_DEFAULT);
+        } catch (Exception e) {
+          LOGGER.warn("Realtime lucene reader refresh thread got interrupted while sleeping: ", e);
+          Thread.currentThread().interrupt();
+        }
+      }
+//Refactoring end
 }

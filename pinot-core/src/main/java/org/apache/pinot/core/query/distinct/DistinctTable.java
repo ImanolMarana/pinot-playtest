@@ -83,66 +83,80 @@ public class DistinctTable {
     _limit = limit;
     _nullHandlingEnabled = nullHandlingEnabled;
 
-    // NOTE: When LIMIT is smaller than or equal to the MAX_INITIAL_CAPACITY, no resize is required.
     int initialCapacity = Math.min(limit, DistinctExecutor.MAX_INITIAL_CAPACITY);
     _recordSet = new ObjectOpenHashSet<>(initialCapacity);
     _records = _recordSet;
 
     if (orderByExpressions != null) {
-      List<String> columnNames = Arrays.asList(dataSchema.getColumnNames());
-      int numOrderByExpressions = orderByExpressions.size();
-      int[] orderByExpressionIndices = new int[numOrderByExpressions];
-      int[] comparisonFactors = new int[numOrderByExpressions];
-      int[] nullComparisonFactors = new int[numOrderByExpressions];
-      for (int i = 0; i < numOrderByExpressions; i++) {
-        OrderByExpressionContext orderByExpression = orderByExpressions.get(i);
-        orderByExpressionIndices[i] = columnNames.indexOf(orderByExpression.getExpression().toString());
-        comparisonFactors[i] = orderByExpression.isAsc() ? -1 : 1;
-        nullComparisonFactors[i] = orderByExpression.isNullsLast() ? -1 : 1;
-      }
-      if (_nullHandlingEnabled) {
-        _priorityQueue = new ObjectHeapPriorityQueue<>(initialCapacity, (r1, r2) -> {
-          Object[] values1 = r1.getValues();
-          Object[] values2 = r2.getValues();
-          for (int i = 0; i < numOrderByExpressions; i++) {
-            int index = orderByExpressionIndices[i];
-            Comparable value1 = (Comparable) values1[index];
-            Comparable value2 = (Comparable) values2[index];
-            if (value1 == null) {
-              if (value2 == null) {
-                continue;
-              }
-              return nullComparisonFactors[i];
-            } else if (value2 == null) {
-              return -nullComparisonFactors[i];
-            }
-            int result = value1.compareTo(value2) * comparisonFactors[i];
-            if (result != 0) {
-              return result;
-            }
-          }
-          return 0;
-        });
-      } else {
-        _priorityQueue = new ObjectHeapPriorityQueue<>(initialCapacity, (r1, r2) -> {
-          Object[] values1 = r1.getValues();
-          Object[] values2 = r2.getValues();
-          for (int i = 0; i < numOrderByExpressions; i++) {
-            int index = orderByExpressionIndices[i];
-            Comparable value1 = (Comparable) values1[index];
-            Comparable value2 = (Comparable) values2[index];
-            int result = value1.compareTo(value2) * comparisonFactors[i];
-            if (result != 0) {
-              return result;
-            }
-          }
-          return 0;
-        });
-      }
+      _priorityQueue = createPriorityQueue(dataSchema, orderByExpressions, initialCapacity);
     } else {
       _priorityQueue = null;
     }
   }
+
+  private PriorityQueue<Record> createPriorityQueue(DataSchema dataSchema,
+      List<OrderByExpressionContext> orderByExpressions, int initialCapacity) {
+    List<String> columnNames = Arrays.asList(dataSchema.getColumnNames());
+    int numOrderByExpressions = orderByExpressions.size();
+    int[] orderByExpressionIndices = new int[numOrderByExpressions];
+    int[] comparisonFactors = new int[numOrderByExpressions];
+    int[] nullComparisonFactors = new int[numOrderByExpressions];
+    for (int i = 0; i < numOrderByExpressions; i++) {
+      OrderByExpressionContext orderByExpression = orderByExpressions.get(i);
+      orderByExpressionIndices[i] = columnNames.indexOf(orderByExpression.getExpression().toString());
+      comparisonFactors[i] = orderByExpression.isAsc() ? -1 : 1;
+      nullComparisonFactors[i] = orderByExpression.isNullsLast() ? -1 : 1;
+    }
+    if (_nullHandlingEnabled) {
+      return new ObjectHeapPriorityQueue<>(initialCapacity, (r1, r2) ->
+          compareRecordsWithNullHandling(r1, r2, orderByExpressionIndices, comparisonFactors,
+              nullComparisonFactors));
+    } else {
+      return new ObjectHeapPriorityQueue<>(initialCapacity, (r1, r2) ->
+          compareRecords(r1, r2, orderByExpressionIndices, comparisonFactors));
+    }
+  }
+
+  private int compareRecordsWithNullHandling(Record r1, Record r2, int[] orderByExpressionIndices,
+      int[] comparisonFactors, int[] nullComparisonFactors) {
+    Object[] values1 = r1.getValues();
+    Object[] values2 = r2.getValues();
+    for (int i = 0; i < orderByExpressionIndices.length; i++) {
+      int index = orderByExpressionIndices[i];
+      Comparable value1 = (Comparable) values1[index];
+      Comparable value2 = (Comparable) values2[index];
+      if (value1 == null) {
+        if (value2 == null) {
+          continue;
+        }
+        return nullComparisonFactors[i];
+      } else if (value2 == null) {
+        return -nullComparisonFactors[i];
+      }
+      int result = value1.compareTo(value2) * comparisonFactors[i];
+      if (result != 0) {
+        return result;
+      }
+    }
+    return 0;
+  }
+
+  private int compareRecords(Record r1, Record r2, int[] orderByExpressionIndices,
+      int[] comparisonFactors) {
+    Object[] values1 = r1.getValues();
+    Object[] values2 = r2.getValues();
+    for (int i = 0; i < orderByExpressionIndices.length; i++) {
+      int index = orderByExpressionIndices[i];
+      Comparable value1 = (Comparable) values1[index];
+      Comparable value2 = (Comparable) values2[index];
+      int result = value1.compareTo(value2) * comparisonFactors[i];
+      if (result != 0) {
+        return result;
+      }
+    }
+    return 0;
+  }
+//Refactoring end
 
   /**
    * Constructor of the wrapper DistinctTable which can only be merged into the main DistinctTable.

@@ -421,60 +421,77 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
    * Get a mapping of explain plan depth to a unique list of explain plans for each depth
    */
   private static Map<Integer, List<ExplainPlanRows>> getAllSegmentsUniqueExplainPlanRowData(Operator root) {
-    Map<Integer, List<ExplainPlanRows>> operatorDepthToRowDataMap = new HashMap<>();
-    if (root == null) {
+      Map<Integer, List<ExplainPlanRows>> operatorDepthToRowDataMap = new HashMap<>();
+      if (root == null) {
+        return operatorDepthToRowDataMap;
+      }
+    
+      Map<Integer, HashSet<Integer>> uniquePlanNodeHashCodes = new HashMap<>();
+    
+      // Obtain the list of all possible segment plans after the combine root node
+      List<? extends Operator> children = root.getChildOperators();
+      for (Operator child : children) {
+        ExplainPlanRows explainPlanRows = generateExplainPlanRows(child);
+        int numRows = explainPlanRows.getExplainPlanRowData().size();
+        if (numRows > 0) {
+          updateOperatorDepthToRowDataMap(operatorDepthToRowDataMap, uniquePlanNodeHashCodes, explainPlanRows, numRows);
+        }
+      }
+    
       return operatorDepthToRowDataMap;
     }
-
-    Map<Integer, HashSet<Integer>> uniquePlanNodeHashCodes = new HashMap<>();
-
-    // Obtain the list of all possible segment plans after the combine root node
-    List<? extends Operator> children = root.getChildOperators();
-    for (Operator child : children) {
+    
+    private static void updateOperatorDepthToRowDataMap(
+        Map<Integer, List<ExplainPlanRows>> operatorDepthToRowDataMap,
+        Map<Integer, HashSet<Integer>> uniquePlanNodeHashCodes, ExplainPlanRows explainPlanRows, int numRows) {
+      operatorDepthToRowDataMap.putIfAbsent(numRows, new ArrayList<>());
+      uniquePlanNodeHashCodes.putIfAbsent(numRows, new HashSet<>());
+      int explainPlanRowsHashCode = explainPlanRows.hashCode();
+      if (!uniquePlanNodeHashCodes.get(numRows).contains(explainPlanRowsHashCode)) {
+        // If the hashcode of the explain plan rows returned for this segment is unique, add it to the data structure
+        // and update the set of hashCodes
+        explainPlanRows.incrementNumSegmentsMatchingThisPlan();
+        operatorDepthToRowDataMap.get(numRows).add(explainPlanRows);
+        uniquePlanNodeHashCodes.get(numRows).add(explainPlanRowsHashCode);
+      } else {
+        handleDuplicateHashCode(operatorDepthToRowDataMap, explainPlanRows, numRows, explainPlanRowsHashCode);
+      }
+    }
+    
+    private static ExplainPlanRows generateExplainPlanRows(Operator child) {
       int[] operatorId = {3};
       ExplainPlanRows explainPlanRows = new ExplainPlanRows();
       // Get the segment explain plan for a single segment
       if (child != null) {
         child.explainPlan(explainPlanRows, operatorId, 2);
       }
-      int numRows = explainPlanRows.getExplainPlanRowData().size();
-      if (numRows > 0) {
-        operatorDepthToRowDataMap.putIfAbsent(numRows, new ArrayList<>());
-        uniquePlanNodeHashCodes.putIfAbsent(numRows, new HashSet<>());
-        int explainPlanRowsHashCode = explainPlanRows.hashCode();
-        if (!uniquePlanNodeHashCodes.get(numRows).contains(explainPlanRowsHashCode)) {
-          // If the hashcode of the explain plan rows returned for this segment is unique, add it to the data structure
-          // and update the set of hashCodes
-          explainPlanRows.incrementNumSegmentsMatchingThisPlan();
-          operatorDepthToRowDataMap.get(numRows).add(explainPlanRows);
-          uniquePlanNodeHashCodes.get(numRows).add(explainPlanRowsHashCode);
-        } else {
-          // If the hashCode for this segment isn't unique, find the explain plan with the matching hashCode and
-          // increment the number of segments that match it provided the plan is the same.
-          boolean explainPlanMatchFound = false;
-          int operatorDepthToRowMapSize = operatorDepthToRowDataMap.get(numRows).size();
-          for (int i = 0; i < operatorDepthToRowMapSize; i++) {
-            ExplainPlanRows explainPlanRowsPotentialMatch = operatorDepthToRowDataMap.get(numRows).get(i);
-            if ((explainPlanRowsPotentialMatch.hashCode() == explainPlanRowsHashCode)
-                && (explainPlanRowsPotentialMatch.equals(explainPlanRows))) {
-              explainPlanRowsPotentialMatch.incrementNumSegmentsMatchingThisPlan();
-              explainPlanMatchFound = true;
-              break;
-            }
-          }
-
-          // HashCode can lead to collisions, which is why an equality check is required to ensure that we don't miss
-          // any potential plans with matching hashcodes. If a match isn't found, add a new entry.
-          if (!explainPlanMatchFound) {
-            explainPlanRows.incrementNumSegmentsMatchingThisPlan();
-            operatorDepthToRowDataMap.get(numRows).add(explainPlanRows);
-          }
+      return explainPlanRows;
+    }
+    
+    private static void handleDuplicateHashCode(Map<Integer, List<ExplainPlanRows>> operatorDepthToRowDataMap,
+        ExplainPlanRows explainPlanRows, int numRows, int explainPlanRowsHashCode) {
+      // If the hashCode for this segment isn't unique, find the explain plan with the matching hashCode and
+      // increment the number of segments that match it provided the plan is the same.
+      boolean explainPlanMatchFound = false;
+      int operatorDepthToRowMapSize = operatorDepthToRowDataMap.get(numRows).size();
+      for (int i = 0; i < operatorDepthToRowMapSize; i++) {
+        ExplainPlanRows explainPlanRowsPotentialMatch = operatorDepthToRowDataMap.get(numRows).get(i);
+        if ((explainPlanRowsPotentialMatch.hashCode() == explainPlanRowsHashCode)
+            && (explainPlanRowsPotentialMatch.equals(explainPlanRows))) {
+          explainPlanRowsPotentialMatch.incrementNumSegmentsMatchingThisPlan();
+          explainPlanMatchFound = true;
+          break;
         }
       }
+    
+      // HashCode can lead to collisions, which is why an equality check is required to ensure that we don't miss
+      // any potential plans with matching hashcodes. If a match isn't found, add a new entry.
+      if (!explainPlanMatchFound) {
+        explainPlanRows.incrementNumSegmentsMatchingThisPlan();
+        operatorDepthToRowDataMap.get(numRows).add(explainPlanRows);
+      }
     }
-
-    return operatorDepthToRowDataMap;
-  }
+//Refactoring end
 
   public static InstanceResponseBlock executeExplainQuery(Plan queryPlan, QueryContext queryContext) {
     ExplainResultsBlock explainResults = new ExplainResultsBlock(queryContext);

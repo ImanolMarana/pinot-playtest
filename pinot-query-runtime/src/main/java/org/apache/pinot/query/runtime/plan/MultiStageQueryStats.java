@@ -262,34 +262,45 @@ public class MultiStageQueryStats {
   }
 
   public void mergeUpstream(List<ByteBuffer> otherStats) {
+    validateInputStats(otherStats);
+    growUpToStage(otherStats.size() - 1);
+
+    for (int i = _currentStageId + 1; i < otherStats.size(); i++) {
+      ByteBuffer otherBuf = otherStats.get(i);
+      if (otherBuf != null) {
+        mergeStatsForStage(i, otherBuf);
+      }
+    }
+  }
+
+  private void validateInputStats(List<ByteBuffer> otherStats) {
     for (int i = 0; i <= _currentStageId && i < otherStats.size(); i++) {
       if (otherStats.get(i) != null) {
         throw new IllegalArgumentException("Cannot merge stats from early stage " + i + " into stats of "
             + "later stage " + _currentStageId);
       }
     }
-    growUpToStage(otherStats.size() - 1);
+  }
 
-    for (int i = _currentStageId + 1; i < otherStats.size(); i++) {
-      ByteBuffer otherBuf = otherStats.get(i);
-      if (otherBuf != null) {
-        StageStats.Closed myStats = getUpstreamStageStats(i);
-        try (InputStream is = new ByteBufferInputStream(Collections.singletonList(otherBuf));
-            DataInputStream dis = new DataInputStream(is)) {
-          if (myStats == null) {
-            StageStats.Closed deserialized = StageStats.Closed.deserialize(dis);
-            _closedStats.set(i - _currentStageId - 1, deserialized);
-            assert getUpstreamStageStats(i) == deserialized;
-          } else {
-            myStats.merge(dis);
-          }
-        } catch (IOException ex) {
-          LOGGER.warn("Error deserializing stats on stage {}. Considering the new stats empty", i, ex);
-        } catch (IllegalArgumentException | IllegalStateException ex) {
-          LOGGER.warn("Error merging stats on stage {}. Ignoring the new stats", i, ex);
-        }
+  private void mergeStatsForStage(int stageId, ByteBuffer otherBuf) {
+    StageStats.Closed myStats = getUpstreamStageStats(stageId);
+    try (InputStream is = new ByteBufferInputStream(Collections.singletonList(otherBuf));
+        DataInputStream dis = new DataInputStream(is)) {
+      if (myStats == null) {
+        StageStats.Closed deserialized = StageStats.Closed.deserialize(dis);
+        _closedStats.set(stageId - _currentStageId - 1, deserialized);
+        assert getUpstreamStageStats(stageId) == deserialized;
+      } else {
+        myStats.merge(dis);
       }
+    } catch (IOException ex) {
+      LOGGER.warn("Error deserializing stats on stage {}. Considering the new stats empty", stageId, ex);
+    } catch (IllegalArgumentException | IllegalStateException ex) {
+      LOGGER.warn("Error merging stats on stage {}. Ignoring the new stats", stageId, ex);
     }
+  }
+
+//Refactoring end
   }
 
   public JsonNode asJson() {

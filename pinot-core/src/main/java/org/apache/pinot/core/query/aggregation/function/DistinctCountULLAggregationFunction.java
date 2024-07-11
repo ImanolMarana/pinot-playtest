@@ -234,38 +234,53 @@ public class DistinctCountULLAggregationFunction extends BaseSingleInputAggregat
     // Treat BYTES value as serialized HyperLogLogPlus
     DataType storedType = blockValSet.getValueType().getStoredType();
     if (storedType == DataType.BYTES) {
-      byte[][] bytesValues = blockValSet.getBytesValuesSV();
-      try {
-        for (int i = 0; i < length; i++) {
-          UltraLogLog value = ObjectSerDeUtils.ULTRA_LOG_LOG_OBJECT_SER_DE.deserialize(bytesValues[i]);
-          for (int groupKey : groupKeysArray[i]) {
-            UltraLogLog ull = groupByResultHolder.getResult(groupKey);
-            if (ull != null) {
-              ull.add(value);
-            } else {
-              // Create a new HyperLogLogPlus for the group
-              groupByResultHolder.setValueForKey(groupKey,
-                  ObjectSerDeUtils.ULTRA_LOG_LOG_OBJECT_SER_DE.deserialize(bytesValues[i]));
-            }
-          }
-        }
-      } catch (Exception e) {
-        throw new RuntimeException("Caught exception while merging UltraLogLog", e);
-      }
+      aggregateGroupByMVBytes(length, groupKeysArray, groupByResultHolder, blockValSet);
       return;
     }
 
     // For dictionary-encoded expression, store dictionary ids into the bitmap
     Dictionary dictionary = blockValSet.getDictionary();
     if (dictionary != null) {
-      int[] dictIds = blockValSet.getDictionaryIdsSV();
-      for (int i = 0; i < length; i++) {
-        setDictIdForGroupKeys(groupByResultHolder, groupKeysArray[i], dictionary, dictIds[i]);
-      }
+      aggregateGroupByMVDictionary(length, groupKeysArray, groupByResultHolder, blockValSet, dictionary);
       return;
     }
 
     // For non-dictionary-encoded expression, store values into the UltraLogLog
+    aggregateGroupByMVNonDictionary(length, groupKeysArray, groupByResultHolder, blockValSet, storedType);
+  }
+
+  private void aggregateGroupByMVBytes(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    byte[][] bytesValues = blockValSet.getBytesValuesSV();
+    try {
+      for (int i = 0; i < length; i++) {
+        UltraLogLog value = ObjectSerDeUtils.ULTRA_LOG_LOG_OBJECT_SER_DE.deserialize(bytesValues[i]);
+        for (int groupKey : groupKeysArray[i]) {
+          UltraLogLog ull = groupByResultHolder.getResult(groupKey);
+          if (ull != null) {
+            ull.add(value);
+          } else {
+            // Create a new HyperLogLogPlus for the group
+            groupByResultHolder.setValueForKey(groupKey,
+                ObjectSerDeUtils.ULTRA_LOG_LOG_OBJECT_SER_DE.deserialize(bytesValues[i]));
+          }
+        }
+      }
+    } catch (Exception e) {
+      throw new RuntimeException("Caught exception while merging UltraLogLog", e);
+    }
+  }
+
+  private void aggregateGroupByMVDictionary(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet, Dictionary dictionary) {
+    int[] dictIds = blockValSet.getDictionaryIdsSV();
+    for (int i = 0; i < length; i++) {
+      setDictIdForGroupKeys(groupByResultHolder, groupKeysArray[i], dictionary, dictIds[i]);
+    }
+  }
+
+  private void aggregateGroupByMVNonDictionary(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet, DataType storedType) {
     switch (storedType) {
       case INT:
         int[] intValues = blockValSet.getIntValuesSV();
@@ -302,6 +317,8 @@ public class DistinctCountULLAggregationFunction extends BaseSingleInputAggregat
             "Illegal data type for DISTINCT_COUNT_HLL_PLUS aggregation function: " + storedType);
     }
   }
+
+//Refactoring end
 
   @Override
   public UltraLogLog extractAggregationResult(AggregationResultHolder aggregationResultHolder) {

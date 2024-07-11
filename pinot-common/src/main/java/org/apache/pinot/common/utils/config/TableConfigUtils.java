@@ -381,35 +381,8 @@ public class TableConfigUtils {
       return tableConfig;
     }
     try {
-      boolean updated = false;
       JsonNode tblCfgJson = tableConfig.toJsonNode();
-      // Apply tier specific overwrites for `tableIndexConfig`
-      JsonNode tblIdxCfgJson = tblCfgJson.get(TableConfig.INDEXING_CONFIG_KEY);
-      if (tblIdxCfgJson != null && tblIdxCfgJson.has(TableConfig.TIER_OVERWRITES_KEY)) {
-        JsonNode tierCfgJson = tblIdxCfgJson.get(TableConfig.TIER_OVERWRITES_KEY).get(tier);
-        if (tierCfgJson != null) {
-          LOGGER.debug("Got table index config overwrites: {} for tier: {}", tierCfgJson, tier);
-          overwriteConfig(tblIdxCfgJson, tierCfgJson);
-          updated = true;
-        }
-      }
-      // Apply tier specific overwrites for `fieldConfigList`
-      JsonNode fieldCfgListJson = tblCfgJson.get(TableConfig.FIELD_CONFIG_LIST_KEY);
-      if (fieldCfgListJson != null && fieldCfgListJson.isArray()) {
-        Iterator<JsonNode> fieldCfgListItr = fieldCfgListJson.elements();
-        while (fieldCfgListItr.hasNext()) {
-          JsonNode fieldCfgJson = fieldCfgListItr.next();
-          if (!fieldCfgJson.has(TableConfig.TIER_OVERWRITES_KEY)) {
-            continue;
-          }
-          JsonNode tierCfgJson = fieldCfgJson.get(TableConfig.TIER_OVERWRITES_KEY).get(tier);
-          if (tierCfgJson != null) {
-            LOGGER.debug("Got field index config overwrites: {} for tier: {}", tierCfgJson, tier);
-            overwriteConfig(fieldCfgJson, tierCfgJson);
-            updated = true;
-          }
-        }
-      }
+      boolean updated = overwriteTierConfigs(tblCfgJson, tier);
       if (updated) {
         LOGGER.debug("Got overwritten table config: {} for tier: {}", tblCfgJson, tier);
         return JsonUtils.jsonNodeToObject(tblCfgJson, TableConfig.class);
@@ -422,6 +395,56 @@ public class TableConfigUtils {
       return tableConfig;
     }
   }
+
+  private static boolean overwriteTierConfigs(JsonNode tblCfgJson, String tier) {
+    boolean updated = false;
+    updated |= overwriteTierConfig(tblCfgJson, tier, TableConfig.INDEXING_CONFIG_KEY);
+    updated |= overwriteTierConfig(tblCfgJson, tier, TableConfig.FIELD_CONFIG_LIST_KEY);
+    return updated;
+  }
+
+  private static boolean overwriteTierConfig(JsonNode tblCfgJson, String tier, String configKey) {
+    JsonNode configJson = tblCfgJson.get(configKey);
+    if (configJson != null) {
+      if (configJson.isArray()) {
+        return overwriteArrayTierConfig(configJson, tier);
+      } else if (configJson.has(TableConfig.TIER_OVERWRITES_KEY)) {
+        JsonNode tierCfgJson = configJson.get(TableConfig.TIER_OVERWRITES_KEY).get(tier);
+        if (tierCfgJson != null) {
+          LOGGER.debug("Got table index config overwrites: {} for tier: {}", tierCfgJson, tier);
+          overwriteConfig(configJson, tierCfgJson);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private static boolean overwriteArrayTierConfig(JsonNode arrayNode, String tier) {
+    Iterator<JsonNode> elementIterator = arrayNode.elements();
+    boolean updated = false;
+    while (elementIterator.hasNext()) {
+      JsonNode element = elementIterator.next();
+      if (element.has(TableConfig.TIER_OVERWRITES_KEY)) {
+        JsonNode tierCfgJson = element.get(TableConfig.TIER_OVERWRITES_KEY).get(tier);
+        if (tierCfgJson != null) {
+          LOGGER.debug("Got field index config overwrites: {} for tier: {}", tierCfgJson, tier);
+          overwriteConfig(element, tierCfgJson);
+          updated = true;
+        }
+      }
+    }
+    return updated;
+  }
+
+  private static void overwriteConfig(JsonNode oldCfg, JsonNode newCfg) {
+    Iterator<Map.Entry<String, JsonNode>> cfgItr = newCfg.fields();
+    while (cfgItr.hasNext()) {
+      Map.Entry<String, JsonNode> cfgEntry = cfgItr.next();
+      ((ObjectNode) oldCfg).set(cfgEntry.getKey(), cfgEntry.getValue());
+    }
+  }
+//Refactoring end
 
   private static void overwriteConfig(JsonNode oldCfg, JsonNode newCfg) {
     Iterator<Map.Entry<String, JsonNode>> cfgItr = newCfg.fields();

@@ -78,6 +78,24 @@ public class ZKMetadataUtils {
   private static void updateSegmentZKMetadata(String tableNameWithType, SegmentZKMetadata segmentZKMetadata,
       SegmentMetadata segmentMetadata, String downloadUrl, @Nullable String crypterName, long segmentSizeInBytes,
       boolean newSegment) {
+    updateSegmentZKMetadataTimestamps(segmentZKMetadata, segmentMetadata, newSegment);
+
+    segmentZKMetadata.setIndexVersion(
+        segmentMetadata.getVersion() != null ? segmentMetadata.getVersion().name() : null);
+    segmentZKMetadata.setTotalDocs(segmentMetadata.getTotalDocs());
+    segmentZKMetadata.setSizeInBytes(segmentSizeInBytes);
+    segmentZKMetadata.setCrc(Long.parseLong(segmentMetadata.getCrc()));
+    segmentZKMetadata.setCreationTime(segmentMetadata.getIndexCreationTime());
+    segmentZKMetadata.setDownloadUrl(downloadUrl);
+    segmentZKMetadata.setCrypterName(crypterName);
+
+    updateSegmentZKMetadataPartitions(segmentZKMetadata, segmentMetadata);
+    updateSegmentZKMetadataCustomMap(segmentZKMetadata, segmentMetadata);
+    updateRealtimeSpecificMetadata(tableNameWithType, segmentZKMetadata, segmentMetadata, newSegment);
+  }
+
+  private static void updateSegmentZKMetadataTimestamps(SegmentZKMetadata segmentZKMetadata,
+      SegmentMetadata segmentMetadata, boolean newSegment) {
     if (newSegment) {
       segmentZKMetadata.setPushTime(System.currentTimeMillis());
     } else {
@@ -98,16 +116,10 @@ public class ZKMetadataUtils {
       segmentZKMetadata.setEndTime(-1);
       segmentZKMetadata.setTimeUnit(null);
     }
-    segmentZKMetadata.setIndexVersion(
-        segmentMetadata.getVersion() != null ? segmentMetadata.getVersion().name() : null);
-    segmentZKMetadata.setTotalDocs(segmentMetadata.getTotalDocs());
-    segmentZKMetadata.setSizeInBytes(segmentSizeInBytes);
-    segmentZKMetadata.setCrc(Long.parseLong(segmentMetadata.getCrc()));
-    segmentZKMetadata.setCreationTime(segmentMetadata.getIndexCreationTime());
-    segmentZKMetadata.setDownloadUrl(downloadUrl);
-    segmentZKMetadata.setCrypterName(crypterName);
+  }
 
-    // Set partition metadata
+  private static void updateSegmentZKMetadataPartitions(SegmentZKMetadata segmentZKMetadata,
+      SegmentMetadata segmentMetadata) {
     Map<String, ColumnPartitionMetadata> columnPartitionMap = new HashMap<>();
     segmentMetadata.getColumnMetadataMap().forEach((column, columnMetadata) -> {
       PartitionFunction partitionFunction = columnMetadata.getPartitionFunction();
@@ -120,9 +132,10 @@ public class ZKMetadataUtils {
     });
     segmentZKMetadata.setPartitionMetadata(
         !columnPartitionMap.isEmpty() ? new SegmentPartitionMetadata(columnPartitionMap) : null);
+  }
 
-    // Update custom metadata
-    // NOTE: Do not remove existing keys because they can be set by the HTTP header from the segment upload request
+  private static void updateSegmentZKMetadataCustomMap(SegmentZKMetadata segmentZKMetadata,
+      SegmentMetadata segmentMetadata) {
     Map<String, String> customMap = segmentZKMetadata.getCustomMap();
     if (customMap == null) {
       customMap = segmentMetadata.getCustomMap();
@@ -130,20 +143,18 @@ public class ZKMetadataUtils {
       customMap.putAll(segmentMetadata.getCustomMap());
     }
     segmentZKMetadata.setCustomMap(customMap);
+  }
 
-    // Set fields specific to realtime table
+  private static void updateRealtimeSpecificMetadata(String tableNameWithType,
+      SegmentZKMetadata segmentZKMetadata, SegmentMetadata segmentMetadata, boolean newSegment) {
     if (TableNameBuilder.isRealtimeTableResource(tableNameWithType)) {
       segmentZKMetadata.setStatus(CommonConstants.Segment.Realtime.Status.UPLOADED);
 
-      // For new segment, start/end offset must exist if the segment name follows LLC segment name convention
       if (newSegment && LLCSegmentName.isLLCSegment(segmentMetadata.getName())) {
         Preconditions.checkArgument(segmentMetadata.getStartOffset() != null && segmentMetadata.getEndOffset() != null,
             "New uploaded LLC segment must have start/end offset in the segment metadata");
       }
 
-      // NOTE:
-      // - If start/end offset is available in the uploaded segment, update them in the segment ZK metadata
-      // - If not, keep the existing start/end offset in the segment ZK metadata unchanged
       if (segmentMetadata.getStartOffset() != null) {
         segmentZKMetadata.setStartOffset(segmentMetadata.getStartOffset());
       }
@@ -153,8 +164,9 @@ public class ZKMetadataUtils {
     }
   }
 
+
   private static boolean isValidTimeMetadata(ColumnMetadata timeColumnMetadata) {
     return timeColumnMetadata != null && timeColumnMetadata.getMinValue() != null
         && timeColumnMetadata.getMaxValue() != null && !timeColumnMetadata.isMinMaxValueInvalid();
   }
-}
+//Refactoring end

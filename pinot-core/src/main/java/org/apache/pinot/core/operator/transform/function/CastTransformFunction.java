@@ -56,65 +56,56 @@ public class CastTransformFunction extends BaseTransformFunction {
     TransformFunction castFormatTransformFunction = arguments.get(1);
     if (castFormatTransformFunction instanceof LiteralTransformFunction) {
       String targetType = ((LiteralTransformFunction) castFormatTransformFunction).getStringLiteral().toUpperCase();
-      switch (targetType) {
-        case "INT":
-        case "INTEGER":
-          _resultMetadata = sourceSV ? INT_SV_NO_DICTIONARY_METADATA : INT_MV_NO_DICTIONARY_METADATA;
-          break;
-        case "LONG":
-          _resultMetadata = sourceSV ? LONG_SV_NO_DICTIONARY_METADATA : LONG_MV_NO_DICTIONARY_METADATA;
-          break;
-        case "FLOAT":
-          _resultMetadata = sourceSV ? FLOAT_SV_NO_DICTIONARY_METADATA : FLOAT_MV_NO_DICTIONARY_METADATA;
-          break;
-        case "DOUBLE":
-          _resultMetadata = sourceSV ? DOUBLE_SV_NO_DICTIONARY_METADATA : DOUBLE_MV_NO_DICTIONARY_METADATA;
-          break;
-        case "DECIMAL":
-        case "BIGDECIMAL":
-        case "BIG_DECIMAL":
-          // TODO: Support MV BIG_DECIMAL
-          Preconditions.checkState(sourceSV, "Cannot cast from MV to BIG_DECIMAL");
-          _resultMetadata = BIG_DECIMAL_SV_NO_DICTIONARY_METADATA;
-          break;
-        case "BOOL":
-        case "BOOLEAN":
-          _resultMetadata = sourceSV ? BOOLEAN_SV_NO_DICTIONARY_METADATA : BOOLEAN_MV_NO_DICTIONARY_METADATA;
-          break;
-        case "TIMESTAMP":
-          _resultMetadata = sourceSV ? TIMESTAMP_SV_NO_DICTIONARY_METADATA : TIMESTAMP_MV_NO_DICTIONARY_METADATA;
-          break;
-        case "STRING":
-        case "VARCHAR":
-          _resultMetadata = sourceSV ? STRING_SV_NO_DICTIONARY_METADATA : STRING_MV_NO_DICTIONARY_METADATA;
-          break;
-        case "INT_ARRAY":
-        case "INTEGER_ARRAY":
-          _resultMetadata = INT_MV_NO_DICTIONARY_METADATA;
-          break;
-        case "LONG_ARRAY":
-          _resultMetadata = LONG_MV_NO_DICTIONARY_METADATA;
-          break;
-        case "FLOAT_ARRAY":
-          _resultMetadata = FLOAT_MV_NO_DICTIONARY_METADATA;
-          break;
-        case "DOUBLE_ARRAY":
-          _resultMetadata = DOUBLE_MV_NO_DICTIONARY_METADATA;
-          break;
-        case "STRING_ARRAY":
-        case "VARCHAR_ARRAY":
-          _resultMetadata = STRING_MV_NO_DICTIONARY_METADATA;
-          break;
-        case "JSON":
-          _resultMetadata = sourceSV ? JSON_SV_NO_DICTIONARY_METADATA : JSON_MV_NO_DICTIONARY_METADATA;
-          break;
-        default:
-          throw new IllegalArgumentException("Unable to cast expression to type - " + targetType);
-      }
+      _resultMetadata = getResultMetadataForTargetType(sourceSV, targetType);
     } else {
       throw new IllegalArgumentException("Invalid cast to type - " + castFormatTransformFunction.getName());
     }
   }
+
+  private TransformResultMetadata getResultMetadataForTargetType(boolean sourceSV, String targetType) {
+    switch (targetType) {
+      case "INT":
+      case "INTEGER":
+        return sourceSV ? INT_SV_NO_DICTIONARY_METADATA : INT_MV_NO_DICTIONARY_METADATA;
+      case "LONG":
+        return sourceSV ? LONG_SV_NO_DICTIONARY_METADATA : LONG_MV_NO_DICTIONARY_METADATA;
+      case "FLOAT":
+        return sourceSV ? FLOAT_SV_NO_DICTIONARY_METADATA : FLOAT_MV_NO_DICTIONARY_METADATA;
+      case "DOUBLE":
+        return sourceSV ? DOUBLE_SV_NO_DICTIONARY_METADATA : DOUBLE_MV_NO_DICTIONARY_METADATA;
+      case "DECIMAL":
+      case "BIGDECIMAL":
+      case "BIG_DECIMAL":
+        // TODO: Support MV BIG_DECIMAL
+        Preconditions.checkState(sourceSV, "Cannot cast from MV to BIG_DECIMAL");
+        return BIG_DECIMAL_SV_NO_DICTIONARY_METADATA;
+      case "BOOL":
+      case "BOOLEAN":
+        return sourceSV ? BOOLEAN_SV_NO_DICTIONARY_METADATA : BOOLEAN_MV_NO_DICTIONARY_METADATA;
+      case "TIMESTAMP":
+        return sourceSV ? TIMESTAMP_SV_NO_DICTIONARY_METADATA : TIMESTAMP_MV_NO_DICTIONARY_METADATA;
+      case "STRING":
+      case "VARCHAR":
+        return sourceSV ? STRING_SV_NO_DICTIONARY_METADATA : STRING_MV_NO_DICTIONARY_METADATA;
+      case "INT_ARRAY":
+      case "INTEGER_ARRAY":
+        return INT_MV_NO_DICTIONARY_METADATA;
+      case "LONG_ARRAY":
+        return LONG_MV_NO_DICTIONARY_METADATA;
+      case "FLOAT_ARRAY":
+        return FLOAT_MV_NO_DICTIONARY_METADATA;
+      case "DOUBLE_ARRAY":
+        return DOUBLE_MV_NO_DICTIONARY_METADATA;
+      case "STRING_ARRAY":
+      case "VARCHAR_ARRAY":
+        return STRING_MV_NO_DICTIONARY_METADATA;
+      case "JSON":
+        return sourceSV ? JSON_SV_NO_DICTIONARY_METADATA : JSON_MV_NO_DICTIONARY_METADATA;
+      default:
+        throw new IllegalArgumentException("Unable to cast expression to type - " + targetType);
+    }
+  }
+//Refactoring end
 
   @Override
   public TransformResultMetadata getResultMetadata() {

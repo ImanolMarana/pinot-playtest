@@ -116,58 +116,71 @@ public class RealtimeSegmentAssignment extends BaseSegmentAssignment {
     int numPartitions = instancePartitions.getNumPartitions();
 
     if (numReplicaGroups == 1 && numPartitions == 1) {
-      // Non-replica-group based assignment:
-      // Uniformly spray the partitions and replicas across the instances.
-      // E.g. (6 instances, 3 partitions, 4 replicas)
-      // "0_0": [i0,  i1,  i2,  i3,  i4,  i5  ]
-      //         p0r0 p0r1 p0r2 p1r3 p1r0 p1r1
-      //         p1r2 p1r3 p2r0 p2r1 p2r2 p2r3
-
-      List<String> instances =
-          SegmentAssignmentUtils.getInstancesForNonReplicaGroupBasedAssignment(instancePartitions, _replication);
-      int numInstances = instances.size();
-      List<String> instancesAssigned = new ArrayList<>(_replication);
-      for (int replicaId = 0; replicaId < _replication; replicaId++) {
-        int instanceIndex = (segmentPartitionId * _replication + replicaId) % numInstances;
-        instancesAssigned.add(instances.get(instanceIndex));
-      }
-      return instancesAssigned;
+      return assignNonReplicaGroupBasedConsumingSegment(segmentPartitionId, instancePartitions);
     } else {
-      // Replica-group based assignment
-      // TODO: Refactor check replication this for segment assignment strategy in follow up PR
-      // See https://github.com/apache/pinot/issues/9047
-      if (numReplicaGroups != _replication) {
-        _logger.warn(
-            "Number of replica-groups in instance partitions {}: {} does not match replication in table config: {} for "
-                + "table: {}, using: {}", instancePartitions.getInstancePartitionsName(), numReplicaGroups,
-            _replication, _tableNameWithType, numReplicaGroups);
-      }
-      List<String> instancesAssigned = new ArrayList<>(numReplicaGroups);
-
-      if (numPartitions == 1) {
-        // Implicit partition:
-        // Within a replica-group, uniformly spray the partitions across the instances.
-        // E.g. (within a replica-group, 3 instances, 6 partitions)
-        // "0_0": [i0, i1, i2]
-        //         p0  p1  p2
-        //         p3  p4  p5
-
-        for (int replicaGroupId = 0; replicaGroupId < numReplicaGroups; replicaGroupId++) {
-          List<String> instances = instancePartitions.getInstances(0, replicaGroupId);
-          instancesAssigned.add(instances.get(segmentPartitionId % instances.size()));
-        }
-      } else {
-        // Explicit partition:
-        // Assign segment to the first instance within the partition.
-
-        for (int replicaGroupId = 0; replicaGroupId < numReplicaGroups; replicaGroupId++) {
-          int partitionId = segmentPartitionId % numPartitions;
-          instancesAssigned.add(instancePartitions.getInstances(partitionId, replicaGroupId).get(0));
-        }
-      }
-
-      return instancesAssigned;
+      return assignReplicaGroupBasedConsumingSegment(segmentPartitionId, instancePartitions, numReplicaGroups,
+          numPartitions);
     }
+  }
+
+  private List<String> assignNonReplicaGroupBasedConsumingSegment(int segmentPartitionId,
+      InstancePartitions instancePartitions) {
+    // Non-replica-group based assignment:
+    // Uniformly spray the partitions and replicas across the instances.
+    // E.g. (6 instances, 3 partitions, 4 replicas)
+    // "0_0": [i0,  i1,  i2,  i3,  i4,  i5  ]
+    //         p0r0 p0r1 p0r2 p1r3 p1r0 p1r1
+    //         p1r2 p1r3 p2r0 p2r1 p2r2 p2r3
+
+    List<String> instances =
+        SegmentAssignmentUtils.getInstancesForNonReplicaGroupBasedAssignment(instancePartitions, _replication);
+    int numInstances = instances.size();
+    List<String> instancesAssigned = new ArrayList<>(_replication);
+    for (int replicaId = 0; replicaId < _replication; replicaId++) {
+      int instanceIndex = (segmentPartitionId * _replication + replicaId) % numInstances;
+      instancesAssigned.add(instances.get(instanceIndex));
+    }
+    return instancesAssigned;
+  }
+
+  private List<String> assignReplicaGroupBasedConsumingSegment(int segmentPartitionId,
+      InstancePartitions instancePartitions, int numReplicaGroups, int numPartitions) {
+    // Replica-group based assignment
+    // TODO: Refactor check replication this for segment assignment strategy in follow up PR
+    // See https://github.com/apache/pinot/issues/9047
+    if (numReplicaGroups != _replication) {
+      _logger.warn(
+          "Number of replica-groups in instance partitions {}: {} does not match replication in table config: {} for "
+              + "table: {}, using: {}", instancePartitions.getInstancePartitionsName(), numReplicaGroups,
+          _replication, _tableNameWithType, numReplicaGroups);
+    }
+    List<String> instancesAssigned = new ArrayList<>(numReplicaGroups);
+
+    if (numPartitions == 1) {
+      // Implicit partition:
+      // Within a replica-group, uniformly spray the partitions across the instances.
+      // E.g. (within a replica-group, 3 instances, 6 partitions)
+      // "0_0": [i0, i1, i2]
+      //         p0  p1  p2
+      //         p3  p4  p5
+
+      for (int replicaGroupId = 0; replicaGroupId < numReplicaGroups; replicaGroupId++) {
+        List<String> instances = instancePartitions.getInstances(0, replicaGroupId);
+        instancesAssigned.add(instances.get(segmentPartitionId % instances.size()));
+      }
+    } else {
+      // Explicit partition:
+      // Assign segment to the first instance within the partition.
+
+      for (int replicaGroupId = 0; replicaGroupId < numReplicaGroups; replicaGroupId++) {
+        int partitionId = segmentPartitionId % numPartitions;
+        instancesAssigned.add(instancePartitions.getInstances(partitionId, replicaGroupId).get(0));
+      }
+    }
+
+    return instancesAssigned;
+  }
+//Refactoring end
   }
 
   @Override

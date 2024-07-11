@@ -61,51 +61,65 @@ public class BalancedInstanceSelector extends BaseInstanceSelector {
     // No need to adjust this map per total segment numbers, as optional segments should be empty most of the time.
     Map<String, String> optionalSegmentToInstanceMap = new HashMap<>();
     if (_adaptiveServerSelector != null) {
-      for (String segment : segments) {
-        List<SegmentInstanceCandidate> candidates = segmentStates.getCandidates(segment);
-        // NOTE: candidates can be null when there is no enabled instances for the segment, or the instance selector has
-        // not been updated (we update all components for routing in sequence)
-        if (candidates == null) {
-          continue;
-        }
-        List<String> candidateInstances = new ArrayList<>(candidates.size());
-        for (SegmentInstanceCandidate candidate : candidates) {
-          candidateInstances.add(candidate.getInstance());
-        }
-        String selectedInstance = _adaptiveServerSelector.select(candidateInstances);
-        // This can only be offline when it is a new segment. And such segment is marked as optional segment so that
-        // broker or server can skip it upon any issue to process it.
-        if (candidates.get(candidateInstances.indexOf(selectedInstance)).isOnline()) {
-          segmentToSelectedInstanceMap.put(segment, selectedInstance);
-        } else {
-          optionalSegmentToInstanceMap.put(segment, selectedInstance);
-        }
-      }
+      selectAdaptiveServer(segments, segmentStates, segmentToSelectedInstanceMap, optionalSegmentToInstanceMap);
     } else {
-      for (String segment : segments) {
-        List<SegmentInstanceCandidate> candidates = segmentStates.getCandidates(segment);
-        // NOTE: candidates can be null when there is no enabled instances for the segment, or the instance selector has
-        // not been updated (we update all components for routing in sequence)
-        if (candidates == null) {
-          continue;
-        }
-        int selectedIdx;
-        if (isUseFixedReplica(queryOptions)) {
-          // candidates array is always sorted
-          selectedIdx = _tableNameHashForFixedReplicaRouting % candidates.size();
-        } else {
-          selectedIdx = requestId++ % candidates.size();
-        }
-        SegmentInstanceCandidate selectedCandidate = candidates.get(selectedIdx);
-        // This can only be offline when it is a new segment. And such segment is marked as optional segment so that
-        // broker or server can skip it upon any issue to process it.
-        if (selectedCandidate.isOnline()) {
-          segmentToSelectedInstanceMap.put(segment, selectedCandidate.getInstance());
-        } else {
-          optionalSegmentToInstanceMap.put(segment, selectedCandidate.getInstance());
-        }
-      }
+      selectWithFixedReplica(segments, requestId, segmentStates, queryOptions, segmentToSelectedInstanceMap,
+          optionalSegmentToInstanceMap);
     }
     return Pair.of(segmentToSelectedInstanceMap, optionalSegmentToInstanceMap);
+  }
+
+  private void selectWithFixedReplica(List<String> segments, int requestId, SegmentStates segmentStates,
+      Map<String, String> queryOptions, Map<String, String> segmentToSelectedInstanceMap,
+      Map<String, String> optionalSegmentToInstanceMap) {
+    for (String segment : segments) {
+      List<SegmentInstanceCandidate> candidates = segmentStates.getCandidates(segment);
+      // NOTE: candidates can be null when there is no enabled instances for the segment, or the instance selector has
+      // not been updated (we update all components for routing in sequence)
+      if (candidates == null) {
+        continue;
+      }
+      int selectedIdx;
+      if (isUseFixedReplica(queryOptions)) {
+        // candidates array is always sorted
+        selectedIdx = _tableNameHashForFixedReplicaRouting % candidates.size();
+      } else {
+        selectedIdx = requestId++ % candidates.size();
+      }
+      SegmentInstanceCandidate selectedCandidate = candidates.get(selectedIdx);
+      // This can only be offline when it is a new segment. And such segment is marked as optional segment so that
+      // broker or server can skip it upon any issue to process it.
+      if (selectedCandidate.isOnline()) {
+        segmentToSelectedInstanceMap.put(segment, selectedCandidate.getInstance());
+      } else {
+        optionalSegmentToInstanceMap.put(segment, selectedCandidate.getInstance());
+      }
+    }
+  }
+
+  private void selectAdaptiveServer(List<String> segments, SegmentStates segmentStates,
+      Map<String, String> segmentToSelectedInstanceMap, Map<String, String> optionalSegmentToInstanceMap) {
+    for (String segment : segments) {
+      List<SegmentInstanceCandidate> candidates = segmentStates.getCandidates(segment);
+      // NOTE: candidates can be null when there is no enabled instances for the segment, or the instance selector has
+      // not been updated (we update all components for routing in sequence)
+      if (candidates == null) {
+        continue;
+      }
+      List<String> candidateInstances = new ArrayList<>(candidates.size());
+      for (SegmentInstanceCandidate candidate : candidates) {
+        candidateInstances.add(candidate.getInstance());
+      }
+      String selectedInstance = _adaptiveServerSelector.select(candidateInstances);
+      // This can only be offline when it is a new segment. And such segment is marked as optional segment so that
+      // broker or server can skip it upon any issue to process it.
+      if (candidates.get(candidateInstances.indexOf(selectedInstance)).isOnline()) {
+        segmentToSelectedInstanceMap.put(segment, selectedInstance);
+      } else {
+        optionalSegmentToInstanceMap.put(segment, selectedInstance);
+      }
+    }
+  }
+//Refactoring end
   }
 }

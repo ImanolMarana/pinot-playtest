@@ -117,56 +117,78 @@ public class MultiPartitionColumnsSegmentPruner implements SegmentPruner {
   }
 
   private boolean isPartitionMatch(Expression filterExpression,
-      Map<String, SegmentPartitionInfo> columnPartitionInfoMap) {
+                                      Map<String, SegmentPartitionInfo> columnPartitionInfoMap) {
+    return isPartitionMatchHelper(filterExpression, columnPartitionInfoMap);
+  }
+
+  private boolean isPartitionMatchHelper(Expression filterExpression,
+                                       Map<String, SegmentPartitionInfo> columnPartitionInfoMap) {
     Function function = filterExpression.getFunctionCall();
     FilterKind filterKind = FilterKind.valueOf(function.getOperator());
     List<Expression> operands = function.getOperands();
     switch (filterKind) {
       case AND:
-        for (Expression child : operands) {
-          if (!isPartitionMatch(child, columnPartitionInfoMap)) {
-            return false;
-          }
-        }
-        return true;
+        return isPartitionMatchForAnd(operands, columnPartitionInfoMap);
       case OR:
-        for (Expression child : operands) {
-          if (isPartitionMatch(child, columnPartitionInfoMap)) {
-            return true;
-          }
-        }
-        return false;
-      case EQUALS: {
-        Identifier identifier = operands.get(0).getIdentifier();
-        if (identifier != null) {
-          SegmentPartitionInfo partitionInfo = columnPartitionInfoMap.get(identifier.getName());
-          return partitionInfo == null || partitionInfo.getPartitions().contains(
-              partitionInfo.getPartitionFunction().getPartition(RequestContextUtils.getStringValue(operands.get(1))));
-        } else {
-          return true;
-        }
-      }
-      case IN: {
-        Identifier identifier = operands.get(0).getIdentifier();
-        if (identifier != null) {
-          SegmentPartitionInfo partitionInfo = columnPartitionInfoMap.get(identifier.getName());
-          if (partitionInfo == null) {
-            return true;
-          }
-          int numOperands = operands.size();
-          for (int i = 1; i < numOperands; i++) {
-            if (partitionInfo.getPartitions().contains(partitionInfo.getPartitionFunction()
-                .getPartition(RequestContextUtils.getStringValue(operands.get(i))))) {
-              return true;
-            }
-          }
-          return false;
-        } else {
-          return true;
-        }
-      }
+        return isPartitionMatchForOr(operands, columnPartitionInfoMap);
+      case EQUALS:
+        return isPartitionMatchForEquals(operands, columnPartitionInfoMap);
+      case IN:
+        return isPartitionMatchForIn(operands, columnPartitionInfoMap);
       default:
         return true;
     }
   }
+
+  private boolean isPartitionMatchForAnd(List<Expression> operands, Map<String, SegmentPartitionInfo> columnPartitionInfoMap) {
+    for (Expression child : operands) {
+      if (!isPartitionMatchHelper(child, columnPartitionInfoMap)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private boolean isPartitionMatchForOr(List<Expression> operands, Map<String, SegmentPartitionInfo> columnPartitionInfoMap) {
+    for (Expression child : operands) {
+      if (isPartitionMatchHelper(child, columnPartitionInfoMap)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private boolean isPartitionMatchForEquals(List<Expression> operands,
+                                          Map<String, SegmentPartitionInfo> columnPartitionInfoMap) {
+    Identifier identifier = operands.get(0).getIdentifier();
+    if (identifier != null) {
+      SegmentPartitionInfo partitionInfo = columnPartitionInfoMap.get(identifier.getName());
+      return partitionInfo == null || partitionInfo.getPartitions().contains(
+          partitionInfo.getPartitionFunction().getPartition(RequestContextUtils.getStringValue(operands.get(1))));
+    } else {
+      return true;
+    }
+  }
+
+  private boolean isPartitionMatchForIn(List<Expression> operands, Map<String, SegmentPartitionInfo> columnPartitionInfoMap) {
+    Identifier identifier = operands.get(0).getIdentifier();
+    if (identifier != null) {
+      SegmentPartitionInfo partitionInfo = columnPartitionInfoMap.get(identifier.getName());
+      if (partitionInfo == null) {
+        return true;
+      }
+      int numOperands = operands.size();
+      for (int i = 1; i < numOperands; i++) {
+        if (partitionInfo.getPartitions().contains(partitionInfo.getPartitionFunction()
+            .getPartition(RequestContextUtils.getStringValue(operands.get(i))))) {
+          return true;
+        }
+      }
+      return false;
+    } else {
+      return true;
+    }
+  }
+
+//Refactoring end
 }

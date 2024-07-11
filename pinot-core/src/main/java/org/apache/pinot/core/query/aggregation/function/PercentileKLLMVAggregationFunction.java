@@ -89,25 +89,37 @@ public class PercentileKLLMVAggregationFunction extends PercentileKLLAggregation
     DataType valueType = valueSet.getValueType();
 
     if (valueType == DataType.BYTES) {
-      // serialized sketch
-      KllDoublesSketch[] deserializedSketches = deserializeSketches(blockValSetMap.get(_expression).getBytesValuesSV());
-      for (int i = 0; i < length; i++) {
-        for (int groupKey : groupKeysArray[i]) {
-          KllDoublesSketch sketch = this.getOrCreateSketch(groupByResultHolder, groupKey);
-          sketch.merge(deserializedSketches[i]);
-        }
-      }
+      aggregateGroupByMVBytes(length, groupKeysArray, groupByResultHolder, blockValSetMap);
     } else {
-      double[][] values = valueSet.getDoubleValuesMV();
-      for (int i = 0; i < length; i++) {
-        for (int groupKey : groupKeysArray[i]) {
-          KllDoublesSketch sketch = getOrCreateSketch(groupByResultHolder, groupKey);
-          for (double val : values[i]) {
-            sketch.update(val);
-          }
+      aggregateGroupByMVDouble(length, groupKeysArray, groupByResultHolder, valueSet);
+    }
+  }
+  
+  private void aggregateGroupByMVBytes(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
+      Map<ExpressionContext, BlockValSet> blockValSetMap){
+    KllDoublesSketch[] deserializedSketches = deserializeSketches(blockValSetMap.get(_expression).getBytesValuesSV());
+    for (int i = 0; i < length; i++) {
+      for (int groupKey : groupKeysArray[i]) {
+        KllDoublesSketch sketch = this.getOrCreateSketch(groupByResultHolder, groupKey);
+        sketch.merge(deserializedSketches[i]);
+      }
+    }
+  }
+  
+  private void aggregateGroupByMVDouble(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder, 
+      BlockValSet valueSet){
+    double[][] values = valueSet.getDoubleValuesMV();
+    for (int i = 0; i < length; i++) {
+      for (int groupKey : groupKeysArray[i]) {
+        KllDoublesSketch sketch = getOrCreateSketch(groupByResultHolder, groupKey);
+        for (double val : values[i]) {
+          sketch.update(val);
         }
       }
     }
+  }
+
+//Refactoring end
   }
 
   @Override

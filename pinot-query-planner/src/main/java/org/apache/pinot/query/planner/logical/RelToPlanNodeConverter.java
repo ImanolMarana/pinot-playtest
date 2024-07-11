@@ -221,6 +221,11 @@ public final class RelToPlanNodeConverter {
     if (isArray) {
       sqlTypeName = relDataType.getComponentType().getSqlTypeName();
     }
+    return convertToColumnDataType(sqlTypeName, isArray, relDataType);
+  }
+
+  private static ColumnDataType convertToColumnDataType(SqlTypeName sqlTypeName, boolean isArray,
+      RelDataType relDataType) {
     switch (sqlTypeName) {
       case BOOLEAN:
         return isArray ? ColumnDataType.BOOLEAN_ARRAY : ColumnDataType.BOOLEAN;
@@ -259,19 +264,6 @@ public final class RelToPlanNodeConverter {
     }
   }
 
-  /**
-   * Calcite uses DEMICAL type to infer data type hoisting and infer arithmetic result types. down casting this back to
-   * the proper primitive type for Pinot.
-   * TODO: Revisit this method:
-   *  - Currently we are converting exact value to approximate value
-   *  - Integer can only cover all values with precision 9; Long can only cover all values with precision 18
-   *
-   * {@link RequestUtils#getLiteralExpression(SqlLiteral)}
-   * @param relDataType the DECIMAL rel data type.
-   * @param isArray
-   * @return proper {@link ColumnDataType}.
-   * @see {@link org.apache.calcite.rel.type.RelDataTypeFactoryImpl#decimalOf}.
-   */
   private static ColumnDataType resolveDecimal(RelDataType relDataType, boolean isArray) {
     int precision = relDataType.getPrecision();
     int scale = relDataType.getScale();
@@ -293,6 +285,7 @@ public final class RelToPlanNodeConverter {
       }
     }
   }
+//Refactoring end
 
   public static Set<String> getTableNamesFromRelRoot(RelNode relRoot) {
     Set<String> tableNames = new HashSet<>();

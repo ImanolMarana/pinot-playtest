@@ -69,31 +69,46 @@ public class PartialUpsertColumnarMerger extends BasePartialUpsertMerger {
       if (_primaryKeyColumns.contains(column) || _comparisonColumns.contains(column)) {
         continue;
       }
-      PartialUpsertColumnMerger merger = _column2Mergers.getOrDefault(column, _defaultColumnValueMerger);
-      // Non-overwrite mergers
-      // (1) If the value of the previous is null value, skip merging and use the new value
-      // (2) Else If the value of new value is null, use the previous value (even for comparison columns)
-      // (3) Else If the column is not a comparison column, we applied the merged value to it
-      if (!(merger instanceof OverwriteMerger)) {
-        Object prevValue = previousRow.getValue(column);
-        if (prevValue != null) {
-          if (newRow.isNullValue(column)) {
-            resultHolder.put(column, prevValue);
-          } else {
-            resultHolder.put(column, merger.merge(prevValue, newRow.getValue(column)));
-          }
-        }
-      } else {
-        // Overwrite mergers
-        // (1) If the merge strategy is Overwrite merger and newValue is not null, skip and use the new value
-        // (2) Otherwise, use previous value if it is not null
-        if (newRow.isNullValue(column)) {
-          Object prevValue = previousRow.getValue(column);
-          if (prevValue != null) {
-            resultHolder.put(column, prevValue);
-          }
-        }
+      mergeColumn(previousRow, newRow, resultHolder, column);
+    }
+  }
+
+  private void mergeColumn(LazyRow previousRow, GenericRow newRow, Map<String, Object> resultHolder, String column) {
+    PartialUpsertColumnMerger merger = _column2Mergers.getOrDefault(column, _defaultColumnValueMerger);
+    if (!(merger instanceof OverwriteMerger)) {
+      mergeNonOverwriteColumn(previousRow, newRow, resultHolder, column, merger);
+    } else {
+      mergeOverwriteColumn(newRow, resultHolder, column);
+    }
+  }
+
+  private void mergeOverwriteColumn(GenericRow newRow, Map<String, Object> resultHolder, String column) {
+    // Overwrite mergers
+    // (1) If the merge strategy is Overwrite merger and newValue is not null, skip and use the new value
+    // (2) Otherwise, use previous value if it is not null
+    if (newRow.isNullValue(column)) {
+      //This could be extracted to a new method if needed
+      Object prevValue = previousRow.getValue(column);
+      if (prevValue != null) {
+        resultHolder.put(column, prevValue);
       }
     }
   }
+
+  private void mergeNonOverwriteColumn(LazyRow previousRow, GenericRow newRow, Map<String, Object> resultHolder,
+      String column, PartialUpsertColumnMerger merger) {
+    // Non-overwrite mergers
+    // (1) If the value of the previous is null value, skip merging and use the new value
+    // (2) Else If the value of new value is null, use the previous value (even for comparison columns)
+    // (3) Else If the column is not a comparison column, we applied the merged value to it
+    Object prevValue = previousRow.getValue(column);
+    if (prevValue != null) {
+      if (newRow.isNullValue(column)) {
+        resultHolder.put(column, prevValue);
+      } else {
+        resultHolder.put(column, merger.merge(prevValue, newRow.getValue(column)));
+      }
+    }
+  }
+//Refactoring end
 }

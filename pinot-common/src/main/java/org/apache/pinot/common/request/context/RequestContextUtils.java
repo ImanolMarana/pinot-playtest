@@ -301,93 +301,42 @@ public class RequestContextUtils {
 
     FilterKind filterKind = FilterKind.valueOf(filterFunction.getFunctionName().toUpperCase());
     List<ExpressionContext> operands = filterFunction.getArguments();
+    return getFilterContextForFilterKind(filterKind, operands);
+  }
+
+  private static FilterContext getFilterContextForFilterKind(FilterKind filterKind,
+      List<ExpressionContext> operands) {
     int numOperands = operands.size();
     switch (filterKind) {
-      case AND: {
-        List<FilterContext> children = new ArrayList<>(numOperands);
-        for (ExpressionContext operand : operands) {
-          FilterContext filter = getFilter(operand);
-          if (!filter.isConstant()) {
-            children.add(filter);
-          } else {
-            if (filter.isConstantFalse()) {
-              return FilterContext.CONSTANT_FALSE;
-            }
-          }
-        }
-        int numChildren = children.size();
-        if (numChildren == 0) {
-          return FilterContext.CONSTANT_TRUE;
-        } else if (numChildren == 1) {
-          return children.get(0);
-        } else {
-          return FilterContext.forAnd(children);
-        }
-      }
-      case OR: {
-        List<FilterContext> children = new ArrayList<>(numOperands);
-        for (ExpressionContext operand : operands) {
-          FilterContext filter = getFilter(operand);
-          if (!filter.isConstant()) {
-            children.add(filter);
-          } else {
-            if (filter.isConstantTrue()) {
-              return FilterContext.CONSTANT_TRUE;
-            }
-          }
-        }
-        int numChildren = children.size();
-        if (numChildren == 0) {
-          return FilterContext.CONSTANT_FALSE;
-        } else if (numChildren == 1) {
-          return children.get(0);
-        } else {
-          return FilterContext.forOr(children);
-        }
-      }
-      case NOT: {
-        assert numOperands == 1;
-        FilterContext filter = getFilter(operands.get(0));
-        if (!filter.isConstant()) {
-          return FilterContext.forNot(filter);
-        } else {
-          return filter.isConstantTrue() ? FilterContext.CONSTANT_FALSE : FilterContext.CONSTANT_TRUE;
-        }
-      }
+      case AND:
+      case OR:
+        return getFilterContextForAndOr(filterKind, operands, numOperands);
+      case NOT:
+        return getFilterContextForNot(operands);
       case EQUALS:
         return FilterContext.forPredicate(new EqPredicate(operands.get(0), getStringValue(operands.get(1))));
       case NOT_EQUALS:
         return FilterContext.forPredicate(new NotEqPredicate(operands.get(0), getStringValue(operands.get(1))));
-      case IN: {
-        List<String> values = new ArrayList<>(numOperands - 1);
-        for (int i = 1; i < numOperands; i++) {
-          values.add(getStringValue(operands.get(i)));
-        }
-        return FilterContext.forPredicate(new InPredicate(operands.get(0), values));
-      }
-      case NOT_IN: {
-        List<String> values = new ArrayList<>(numOperands - 1);
-        for (int i = 1; i < numOperands; i++) {
-          values.add(getStringValue(operands.get(i)));
-        }
-        return FilterContext.forPredicate(new NotInPredicate(operands.get(0), values));
-      }
+      case IN:
+        return getFilterContextForIn(operands, numOperands);
+      case NOT_IN:
+        return getFilterContextForNotIn(operands, numOperands);
       case GREATER_THAN:
         return FilterContext.forPredicate(
-            new RangePredicate(operands.get(0), false, getStringValue(operands.get(1)), false, RangePredicate.UNBOUNDED,
-                operands.get(1).getLiteral().getType()));
+            new RangePredicate(operands.get(0), false, getStringValue(operands.get(1)), false,
+                RangePredicate.UNBOUNDED, operands.get(1).getLiteral().getType()));
       case GREATER_THAN_OR_EQUAL:
         return FilterContext.forPredicate(
-            new RangePredicate(operands.get(0), true, getStringValue(operands.get(1)), false, RangePredicate.UNBOUNDED,
-                operands.get(1).getLiteral().getType()));
+            new RangePredicate(operands.get(0), true, getStringValue(operands.get(1)), false,
+                RangePredicate.UNBOUNDED, operands.get(1).getLiteral().getType()));
       case LESS_THAN:
         return FilterContext.forPredicate(
-            new RangePredicate(operands.get(0), false, RangePredicate.UNBOUNDED, false, getStringValue(operands.get(1)),
-                operands.get(1).getLiteral().getType()));
+            new RangePredicate(operands.get(0), false, RangePredicate.UNBOUNDED, false,
+                getStringValue(operands.get(1)), operands.get(1).getLiteral().getType()));
       case LESS_THAN_OR_EQUAL:
         return FilterContext.forPredicate(
-            new RangePredicate(operands.get(0), false, RangePredicate.UNBOUNDED, true, getStringValue(operands.get(1)),
-                operands.get(1).getLiteral().getType()));
+            new RangePredicate(operands.get(0), false, RangePredicate.UNBOUNDED, true,
+                getStringValue(operands.get(1)), operands.get(1).getLiteral().getType()));
       case BETWEEN:
         return FilterContext.forPredicate(
             new RangePredicate(operands.get(0), true, getStringValue(operands.get(1)), true,
@@ -406,12 +355,76 @@ public class RequestContextUtils {
       case JSON_MATCH:
         return FilterContext.forPredicate(new JsonMatchPredicate(operands.get(0), getStringValue(operands.get(1))));
       case VECTOR_SIMILARITY:
-        int topK = VectorSimilarityPredicate.DEFAULT_TOP_K;
-        if (operands.size() == 3) {
-          topK = (int) operands.get(2).getLiteral().getLongValue();
+        return getFilterContextForVectorSimilarity(operands);
+      case IS_NULL:
+        return FilterContext.forPredicate(new IsNullPredicate(operands.get(0)));
+      case IS_NOT_NULL:
+        return FilterContext.forPredicate(new IsNotNullPredicate(operands.get(0)));
+      default:
+        throw new IllegalStateException();
+    }
+  }
+
+  private static FilterContext getFilterContextForAndOr(FilterKind filterKind, List<ExpressionContext> operands,
+      int numOperands) {
+    List<FilterContext> children = new ArrayList<>(numOperands);
+    for (ExpressionContext operand : operands) {
+      FilterContext filter = getFilter(operand);
+      if (!filter.isConstant()) {
+        children.add(filter);
+      } else {
+        if ((filterKind == FilterKind.AND && filter.isConstantFalse()) || (filterKind == FilterKind.OR
+            && filter.isConstantTrue())) {
+          return filter;
         }
-        return FilterContext.forPredicate(
-            new VectorSimilarityPredicate(operands.get(0), getVectorValue(operands.get(1)), topK));
+      }
+    }
+    int numChildren = children.size();
+    if (numChildren == 0) {
+      return filterKind == FilterKind.AND ? FilterContext.CONSTANT_TRUE : FilterContext.CONSTANT_FALSE;
+    } else if (numChildren == 1) {
+      return children.get(0);
+    } else {
+      return filterKind == FilterKind.AND ? FilterContext.forAnd(children) : FilterContext.forOr(children);
+    }
+  }
+
+  private static FilterContext getFilterContextForNot(List<ExpressionContext> operands) {
+    assert operands.size() == 1;
+    FilterContext filter = getFilter(operands.get(0));
+    if (!filter.isConstant()) {
+      return FilterContext.forNot(filter);
+    } else {
+      return filter.isConstantTrue() ? FilterContext.CONSTANT_FALSE : FilterContext.CONSTANT_TRUE;
+    }
+  }
+
+  private static FilterContext getFilterContextForIn(List<ExpressionContext> operands, int numOperands) {
+    List<String> values = new ArrayList<>(numOperands - 1);
+    for (int i = 1; i < numOperands; i++) {
+      values.add(getStringValue(operands.get(i)));
+    }
+    return FilterContext.forPredicate(new InPredicate(operands.get(0), values));
+  }
+
+  private static FilterContext getFilterContextForNotIn(List<ExpressionContext> operands, int numOperands) {
+    List<String> values = new ArrayList<>(numOperands - 1);
+    for (int i = 1; i < numOperands; i++) {
+      values.add(getStringValue(operands.get(i)));
+    }
+    return FilterContext.forPredicate(new NotInPredicate(operands.get(0), values));
+  }
+
+  private static FilterContext getFilterContextForVectorSimilarity(List<ExpressionContext> operands) {
+    int topK = VectorSimilarityPredicate.DEFAULT_TOP_K;
+    if (operands.size() == 3) {
+      topK = (int) operands.get(2).getLiteral().getLongValue();
+    }
+    return FilterContext.forPredicate(
+        new VectorSimilarityPredicate(operands.get(0), getVectorValue(operands.get(1)), topK));
+  }
+
+  //Refactoring end
       case IS_NULL:
         return FilterContext.forPredicate(new IsNullPredicate(operands.get(0)));
       case IS_NOT_NULL:

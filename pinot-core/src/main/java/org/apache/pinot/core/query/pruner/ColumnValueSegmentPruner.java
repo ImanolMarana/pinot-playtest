@@ -167,65 +167,48 @@ public class ColumnValueSegmentPruner extends ValueBasedSegmentPruner {
     // NOTE: Column must exist after DataSchemaSegmentPruner
     assert dataSource != null;
     DataSourceMetadata dataSourceMetadata = dataSource.getDataSourceMetadata();
+    return !isValidRange(rangePredicate, dataSourceMetadata) || isOutOfRange(rangePredicate, dataSourceMetadata);
+  }
 
-    // Get lower/upper boundary value
-    DataType dataType = dataSourceMetadata.getDataType();
-    String lowerBound = rangePredicate.getLowerBound();
-    Comparable lowerBoundValue = null;
-    if (!lowerBound.equals(RangePredicate.UNBOUNDED)) {
-      lowerBoundValue = convertValue(lowerBound, dataType);
-    }
-    boolean lowerInclusive = rangePredicate.isLowerInclusive();
-    String upperBound = rangePredicate.getUpperBound();
-    Comparable upperBoundValue = null;
-    if (!upperBound.equals(RangePredicate.UNBOUNDED)) {
-      upperBoundValue = convertValue(upperBound, dataType);
-    }
-    boolean upperInclusive = rangePredicate.isUpperInclusive();
-
-    // Check if the range is valid
+  private boolean isValidRange(RangePredicate rangePredicate, DataSourceMetadata dataSourceMetadata) {
     // TODO: This check should be performed on the broker
+    DataType dataType = dataSourceMetadata.getDataType();
+    Comparable lowerBoundValue = getBoundValue(rangePredicate.getLowerBound(), dataType,
+        rangePredicate.isLowerInclusive());
+    Comparable upperBoundValue = getBoundValue(rangePredicate.getUpperBound(), dataType,
+        rangePredicate.isUpperInclusive());
     if (lowerBoundValue != null && upperBoundValue != null) {
-      if (lowerInclusive && upperInclusive) {
-        if (lowerBoundValue.compareTo(upperBoundValue) > 0) {
-          return true;
-        }
-      } else {
-        if (lowerBoundValue.compareTo(upperBoundValue) >= 0) {
-          return true;
-        }
-      }
+      return lowerBoundValue.compareTo(upperBoundValue) <= 0;
     }
+    return true;
+  }
 
-    // Check min/max value
+  private Comparable getBoundValue(String bound, DataType dataType, boolean inclusive) {
+    if (bound.equals(RangePredicate.UNBOUNDED)) {
+      return null;
+    }
+    return convertValue(bound, dataType);
+  }
+
+  private boolean isOutOfRange(RangePredicate rangePredicate, DataSourceMetadata dataSourceMetadata) {
+    DataType dataType = dataSourceMetadata.getDataType();
+    Comparable lowerBoundValue = getBoundValue(rangePredicate.getLowerBound(), dataType,
+        rangePredicate.isLowerInclusive());
+    Comparable upperBoundValue = getBoundValue(rangePredicate.getUpperBound(), dataType,
+        rangePredicate.isUpperInclusive());
     Comparable minValue = dataSourceMetadata.getMinValue();
-    if (minValue != null) {
-      if (upperBoundValue != null) {
-        if (upperInclusive) {
-          if (upperBoundValue.compareTo(minValue) < 0) {
-            return true;
-          }
-        } else {
-          if (upperBoundValue.compareTo(minValue) <= 0) {
-            return true;
-          }
-        }
-      }
-    }
     Comparable maxValue = dataSourceMetadata.getMaxValue();
-    if (maxValue != null) {
-      if (lowerBoundValue != null) {
-        if (lowerInclusive) {
-          if (lowerBoundValue.compareTo(maxValue) > 0) {
-            return true;
-          }
-        } else {
-          if (lowerBoundValue.compareTo(maxValue) >= 0) {
-            return true;
-          }
-        }
-      }
-    }
+    return isLowerOutOfRange(upperBoundValue, minValue) || isUpperOutOfRange(lowerBoundValue, maxValue);
+  }
+
+  private boolean isLowerOutOfRange(Comparable upperBoundValue, Comparable minValue) {
+    return upperBoundValue != null && minValue != null && upperBoundValue.compareTo(minValue) < 0;
+  }
+
+  private boolean isUpperOutOfRange(Comparable lowerBoundValue, Comparable maxValue) {
+    return lowerBoundValue != null && maxValue != null && lowerBoundValue.compareTo(maxValue) > 0;
+  }
+//Refactoring end
     return false;
   }
 

@@ -591,26 +591,11 @@ public abstract class BaseDistinctAggregateAggregationFunction<T extends Compara
   protected void svAggregateGroupByMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
       Map<ExpressionContext, BlockValSet> blockValSetMap) {
     BlockValSet blockValSet = blockValSetMap.get(_expression);
-    RoaringBitmap nullBitmap = null;
 
     // For dictionary-encoded expression, store dictionary ids into the bitmap
     Dictionary dictionary = blockValSet.getDictionary();
     if (dictionary != null) {
-      if (_nullHandlingEnabled) {
-        nullBitmap = blockValSet.getNullBitmap();
-      }
-      int[] dictIds = blockValSet.getDictionaryIdsSV();
-      if (nullBitmap != null && !nullBitmap.isEmpty()) {
-        for (int i = 0; i < length; i++) {
-          if (!nullBitmap.contains(i)) {
-            setDictIdForGroupKeys(groupByResultHolder, groupKeysArray[i], dictionary, dictIds[i]);
-          }
-        }
-      } else {
-        for (int i = 0; i < length; i++) {
-          setDictIdForGroupKeys(groupByResultHolder, groupKeysArray[i], dictionary, dictIds[i]);
-        }
-      }
+      handleDictionaryEncodedGroupByMV(length, groupKeysArray, groupByResultHolder, blockValSet, dictionary);
       return;
     }
 
@@ -618,94 +603,22 @@ public abstract class BaseDistinctAggregateAggregationFunction<T extends Compara
     DataType storedType = blockValSet.getValueType().getStoredType();
     switch (storedType) {
       case INT:
-        int[] intValues = blockValSet.getIntValuesSV();
-        nullBitmap = blockValSet.getNullBitmap();
-        if (nullBitmap != null && !nullBitmap.isEmpty()) {
-          for (int i = 0; i < length; i++) {
-            if (!nullBitmap.contains(i)) {
-              setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], intValues[i]);
-            }
-          }
-        } else {
-          for (int i = 0; i < length; i++) {
-            setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], intValues[i]);
-          }
-        }
+        handleIntGroupByMV(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case LONG:
-        long[] longValues = blockValSet.getLongValuesSV();
-        nullBitmap = blockValSet.getNullBitmap();
-        if (nullBitmap != null && !nullBitmap.isEmpty()) {
-          for (int i = 0; i < length; i++) {
-            if (!nullBitmap.contains(i)) {
-              setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], longValues[i]);
-            }
-          }
-        } else {
-          for (int i = 0; i < length; i++) {
-            setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], longValues[i]);
-          }
-        }
+        handleLongGroupByMV(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case FLOAT:
-        float[] floatValues = blockValSet.getFloatValuesSV();
-        nullBitmap = blockValSet.getNullBitmap();
-        if (nullBitmap != null && !nullBitmap.isEmpty()) {
-          for (int i = 0; i < length; i++) {
-            if (!nullBitmap.contains(i)) {
-              setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], floatValues[i]);
-            }
-          }
-        } else {
-          for (int i = 0; i < length; i++) {
-            setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], floatValues[i]);
-          }
-        }
+        handleFloatGroupByMV(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case DOUBLE:
-        double[] doubleValues = blockValSet.getDoubleValuesSV();
-        nullBitmap = blockValSet.getNullBitmap();
-        if (nullBitmap != null && !nullBitmap.isEmpty()) {
-          for (int i = 0; i < length; i++) {
-            if (!nullBitmap.contains(i)) {
-              setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], doubleValues[i]);
-            }
-          }
-        } else {
-          for (int i = 0; i < length; i++) {
-            setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], doubleValues[i]);
-          }
-        }
+        handleDoubleGroupByMV(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case STRING:
-        String[] stringValues = blockValSet.getStringValuesSV();
-        nullBitmap = blockValSet.getNullBitmap();
-        if (nullBitmap != null && !nullBitmap.isEmpty()) {
-          for (int i = 0; i < length; i++) {
-            if (!nullBitmap.contains(i)) {
-              setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], stringValues[i]);
-            }
-          }
-        } else {
-          for (int i = 0; i < length; i++) {
-            setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], stringValues[i]);
-          }
-        }
+        handleStringGroupByMV(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case BYTES:
-        byte[][] bytesValues = blockValSet.getBytesValuesSV();
-        nullBitmap = blockValSet.getNullBitmap();
-        if (nullBitmap != null && !nullBitmap.isEmpty()) {
-          for (int i = 0; i < length; i++) {
-            if (!nullBitmap.contains(i)) {
-              setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], new ByteArray(bytesValues[i]));
-            }
-          }
-        } else {
-          for (int i = 0; i < length; i++) {
-            setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], new ByteArray(bytesValues[i]));
-          }
-        }
+        handleBytesGroupByMV(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       default:
         throw new IllegalStateException(
@@ -713,169 +626,127 @@ public abstract class BaseDistinctAggregateAggregationFunction<T extends Compara
     }
   }
 
-  /**
-   * Performs aggregation for a MV column with group by on a MV column.
-   */
-  protected void mvAggregateGroupByMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
-      Map<ExpressionContext, BlockValSet> blockValSetMap) {
-    BlockValSet blockValSet = blockValSetMap.get(_expression);
-
-    // For dictionary-encoded expression, store dictionary ids into the bitmap
-    Dictionary dictionary = blockValSet.getDictionary();
-    if (dictionary != null) {
-      int[][] dictIds = blockValSet.getDictionaryIdsMV();
+  private void handleDictionaryEncodedGroupByMV(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet, Dictionary dictionary) {
+    RoaringBitmap nullBitmap = null;
+    if (_nullHandlingEnabled) {
+      nullBitmap = blockValSet.getNullBitmap();
+    }
+    int[] dictIds = blockValSet.getDictionaryIdsSV();
+    if (nullBitmap != null && !nullBitmap.isEmpty()) {
       for (int i = 0; i < length; i++) {
-        for (int groupKey : groupKeysArray[i]) {
-          getDictIdBitmap(groupByResultHolder, groupKey, dictionary).add(dictIds[i]);
+        if (!nullBitmap.contains(i)) {
+          setDictIdForGroupKeys(groupByResultHolder, groupKeysArray[i], dictionary, dictIds[i]);
         }
       }
-      return;
-    }
-
-    // For non-dictionary-encoded expression, store hash code of the values into the value set
-    DataType storedType = blockValSet.getValueType().getStoredType();
-    switch (storedType) {
-      case INT:
-        int[][] intValues = blockValSet.getIntValuesMV();
-        for (int i = 0; i < length; i++) {
-          for (int groupKey : groupKeysArray[i]) {
-            IntOpenHashSet intSet = (IntOpenHashSet) getValueSet(groupByResultHolder, groupKey, DataType.INT);
-            for (int value : intValues[i]) {
-              intSet.add(value);
-            }
-          }
-        }
-        break;
-      case LONG:
-        long[][] longValues = blockValSet.getLongValuesMV();
-        for (int i = 0; i < length; i++) {
-          for (int groupKey : groupKeysArray[i]) {
-            LongOpenHashSet longSet = (LongOpenHashSet) getValueSet(groupByResultHolder, groupKey, DataType.LONG);
-            for (long value : longValues[i]) {
-              longSet.add(value);
-            }
-          }
-        }
-        break;
-      case FLOAT:
-        float[][] floatValues = blockValSet.getFloatValuesMV();
-        for (int i = 0; i < length; i++) {
-          for (int groupKey : groupKeysArray[i]) {
-            FloatOpenHashSet floatSet = (FloatOpenHashSet) getValueSet(groupByResultHolder, groupKey, DataType.FLOAT);
-            for (float value : floatValues[i]) {
-              floatSet.add(value);
-            }
-          }
-        }
-        break;
-      case DOUBLE:
-        double[][] doubleValues = blockValSet.getDoubleValuesMV();
-        for (int i = 0; i < length; i++) {
-          for (int groupKey : groupKeysArray[i]) {
-            DoubleOpenHashSet doubleSet =
-                (DoubleOpenHashSet) getValueSet(groupByResultHolder, groupKey, DataType.DOUBLE);
-            for (double value : doubleValues[i]) {
-              doubleSet.add(value);
-            }
-          }
-        }
-        break;
-      case STRING:
-        String[][] stringValues = blockValSet.getStringValuesMV();
-        for (int i = 0; i < length; i++) {
-          for (int groupKey : groupKeysArray[i]) {
-            ObjectOpenHashSet<String> stringSet =
-                (ObjectOpenHashSet<String>) getValueSet(groupByResultHolder, groupKey, DataType.STRING);
-            //noinspection ManualArrayToCollectionCopy
-            for (String value : stringValues[i]) {
-              //noinspection UseBulkOperation
-              stringSet.add(value);
-            }
-          }
-        }
-        break;
-      default:
-        throw new IllegalStateException(
-            "Illegal data type for " + _functionType.getName() + " aggregation function: " + storedType);
+    } else {
+      for (int i = 0; i < length; i++) {
+        setDictIdForGroupKeys(groupByResultHolder, groupKeysArray[i], dictionary, dictIds[i]);
+      }
     }
   }
 
-  /**
-   * Returns the value set from the result holder or creates a new one if it does not exist.
-   */
-  protected static Set getValueSet(AggregationResultHolder aggregationResultHolder, DataType valueType) {
-    Set valueSet = aggregationResultHolder.getResult();
-    if (valueSet == null) {
-      valueSet = getValueSet(valueType);
-      aggregationResultHolder.setValue(valueSet);
-    }
-    return valueSet;
+  private void handleIntGroupByMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
+      BlockValSet blockValSet) {
+    int[] intValues = blockValSet.getIntValuesSV();
+    RoaringBitmap nullBitmap = blockValSet.getNullBitmap();
+    handleValuesGroupByMV(length, groupKeysArray, groupByResultHolder, intValues, nullBitmap);
   }
 
-  /**
-   * Helper method to create a value set for the given value type.
-   */
-  private static Set getValueSet(DataType valueType) {
-    switch (valueType) {
-      case INT:
-        return new IntOpenHashSet();
-      case LONG:
-        return new LongOpenHashSet();
-      case FLOAT:
-        return new FloatOpenHashSet();
-      case DOUBLE:
-        return new DoubleOpenHashSet();
-      case STRING:
-      case BYTES:
-        return new ObjectOpenHashSet();
-      default:
-        throw new IllegalStateException("Illegal data type for DISTINCT_AGGREGATE aggregation function valueType");
+  private void handleLongGroupByMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
+      BlockValSet blockValSet) {
+    long[] longValues = blockValSet.getLongValuesSV();
+    RoaringBitmap nullBitmap = blockValSet.getNullBitmap();
+    handleValuesGroupByMV(length, groupKeysArray, groupByResultHolder, longValues, nullBitmap);
+  }
+
+  private void handleFloatGroupByMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
+      BlockValSet blockValSet) {
+    float[] floatValues = blockValSet.getFloatValuesSV();
+    RoaringBitmap nullBitmap = blockValSet.getNullBitmap();
+    handleValuesGroupByMV(length, groupKeysArray, groupByResultHolder, floatValues, nullBitmap);
+  }
+
+  private void handleDoubleGroupByMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
+      BlockValSet blockValSet) {
+    double[] doubleValues = blockValSet.getDoubleValuesSV();
+    RoaringBitmap nullBitmap = blockValSet.getNullBitmap();
+    handleValuesGroupByMV(length, groupKeysArray, groupByResultHolder, doubleValues, nullBitmap);
+  }
+
+  private void handleStringGroupByMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
+      BlockValSet blockValSet) {
+    String[] stringValues = blockValSet.getStringValuesSV();
+    RoaringBitmap nullBitmap = blockValSet.getNullBitmap();
+    handleValuesGroupByMV(length, groupKeysArray, groupByResultHolder, stringValues, nullBitmap);
+  }
+
+  private void handleBytesGroupByMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
+      BlockValSet blockValSet) {
+    byte[][] bytesValues = blockValSet.getBytesValuesSV();
+    RoaringBitmap nullBitmap = blockValSet.getNullBitmap();
+    if (nullBitmap != null && !nullBitmap.isEmpty()) {
+      for (int i = 0; i < length; i++) {
+        if (!nullBitmap.contains(i)) {
+          setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], new ByteArray(bytesValues[i]));
+        }
+      }
+    } else {
+      for (int i = 0; i < length; i++) {
+        setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], new ByteArray(bytesValues[i]));
+      }
+    }
+  }
+  
+  private void handleValuesGroupByMV(int length, int[][] groupKeysArray, GroupByResultHolder groupByResultHolder,
+      Object values, RoaringBitmap nullBitmap) {
+    if (nullBitmap != null && !nullBitmap.isEmpty()) {
+      for (int i = 0; i < length; i++) {
+        if (!nullBitmap.contains(i)) {
+          setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], values, i);
+        }
+      }
+    } else {
+      for (int i = 0; i < length; i++) {
+        setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], values, i);
+      }
     }
   }
 
-  /**
-   * Returns the dictionary id bitmap for the given group key or creates a new one if it does not exist.
-   */
-  protected static RoaringBitmap getDictIdBitmap(GroupByResultHolder groupByResultHolder, int groupKey,
-      Dictionary dictionary) {
-    DictIdsWrapper dictIdsWrapper = groupByResultHolder.getResult(groupKey);
-    if (dictIdsWrapper == null) {
-      dictIdsWrapper = new DictIdsWrapper(dictionary);
-      groupByResultHolder.setValueForKey(groupKey, dictIdsWrapper);
-    }
-    return dictIdsWrapper._dictIdBitmap;
-  }
-
-  /**
-   * Returns the value set for the given group key or creates a new one if it does not exist.
-   */
-  protected static Set getValueSet(GroupByResultHolder groupByResultHolder, int groupKey, DataType valueType) {
-    Set valueSet = groupByResultHolder.getResult(groupKey);
-    if (valueSet == null) {
-      valueSet = getValueSet(valueType);
-      groupByResultHolder.setValueForKey(groupKey, valueSet);
-    }
-    return valueSet;
-  }
-
-  /**
-   * Helper method to set dictionary id for the given group keys into the result holder.
-   */
-  private static void setDictIdForGroupKeys(GroupByResultHolder groupByResultHolder, int[] groupKeys,
+  private void setDictIdForGroupKeys(GroupByResultHolder groupByResultHolder, int[] groupKeys,
       Dictionary dictionary, int dictId) {
     for (int groupKey : groupKeys) {
       getDictIdBitmap(groupByResultHolder, groupKey, dictionary).add(dictId);
     }
   }
 
-  /**
-   * Helper method to set INT value for the given group keys into the result holder.
-   */
-  private static void setValueForGroupKeys(GroupByResultHolder groupByResultHolder, int[] groupKeys, int value) {
-    for (int groupKey : groupKeys) {
-      ((IntOpenHashSet) getValueSet(groupByResultHolder, groupKey, DataType.INT)).add(value);
+  private void setValueForGroupKeys(GroupByResultHolder groupByResultHolder, int[] groupKeys, Object value, int index) {
+    if (value instanceof int[]) {
+      for (int groupKey : groupKeys) {
+        ((IntOpenHashSet) getValueSet(groupByResultHolder, groupKey, DataType.INT)).add(((int[]) value)[index]);
+      }
+    } else if (value instanceof long[]) {
+      for (int groupKey : groupKeys) {
+        ((LongOpenHashSet) getValueSet(groupByResultHolder, groupKey, DataType.LONG)).add(((long[]) value)[index]);
+      }
+    } else if (value instanceof float[]) {
+      for (int groupKey : groupKeys) {
+        ((FloatOpenHashSet) getValueSet(groupByResultHolder, groupKey, DataType.FLOAT)).add(((float[]) value)[index]);
+      }
+    } else if (value instanceof double[]) {
+      for (int groupKey : groupKeys) {
+        ((DoubleOpenHashSet) getValueSet(groupByResultHolder, groupKey, DataType.DOUBLE)).add(((double[]) value)[index]);
+      }
+    } else if (value instanceof String[]) {
+      for (int groupKey : groupKeys) {
+        ((ObjectOpenHashSet<String>) getValueSet(groupByResultHolder, groupKey, DataType.STRING)).add(((String[]) value)[index]);
+      }
     }
   }
+
+  //Existing methods below this line
+
+//Refactoring end
 
   /**
    * Helper method to set LONG value for the given group keys into the result holder.

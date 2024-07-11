@@ -222,42 +222,69 @@ public class SegmentStatusChecker extends ControllerPeriodicTask<SegmentStatusCh
     }
 
     if (!idealState.isEnabled()) {
-      if (context._logDisabledTables) {
-        LOGGER.warn("Table {} is disabled. Skipping segment status checks", tableNameWithType);
-      }
-      removeMetricsForTable(tableNameWithType);
-      context._disabledTables.add(tableNameWithType);
+      handleDisabledTable(tableNameWithType, context);
       return;
     }
 
     //check if table consumption is paused
-    boolean isTablePaused =
-        Boolean.parseBoolean(idealState.getRecord().getSimpleField(PinotLLCRealtimeSegmentManager.IS_TABLE_PAUSED));
-
-    if (isTablePaused) {
+    if (Boolean.parseBoolean(idealState.getRecord().getSimpleField(PinotLLCRealtimeSegmentManager.IS_TABLE_PAUSED))) {
       context._pausedTables.add(tableNameWithType);
     }
 
     if (idealState.getPartitionSet().isEmpty()) {
-      int nReplicasFromIdealState = 1;
-      try {
-        nReplicasFromIdealState = Integer.valueOf(idealState.getReplicas());
-      } catch (NumberFormatException e) {
-        // Ignore
-      }
-      _controllerMetrics
-          .setValueOfTableGauge(tableNameWithType, ControllerGauge.NUMBER_OF_REPLICAS, nReplicasFromIdealState);
-      _controllerMetrics.setValueOfTableGauge(tableNameWithType, ControllerGauge.PERCENT_OF_REPLICAS, 100);
-      _controllerMetrics.setValueOfTableGauge(tableNameWithType, ControllerGauge.PERCENT_SEGMENTS_AVAILABLE, 100);
+      handleEmptyPartitionSet(tableNameWithType, idealState);
       return;
     }
 
     // Get the segments excluding the replaced segments which are specified in the segment lineage entries and cannot
     // be queried from the table.
+    Set<String> segmentsExcludeReplaced = getSegmentsExcludeReplaced(tableNameWithType, idealState);
+
+    updateSegmentCountMetrics(tableNameWithType, idealState, segmentsExcludeReplaced);
+
+    ExternalView externalView = _pinotHelixResourceManager.getTableExternalView(tableNameWithType);
+
+    updateSegmentStateMetrics(
+        tableNameWithType,
+        tableConfig,
+        context,
+        tableType,
+        idealState,
+        segmentsExcludeReplaced,
+        externalView);
+  }
+
+  private void handleDisabledTable(String tableNameWithType, Context context) {
+    if (context._logDisabledTables) {
+      LOGGER.warn("Table {} is disabled. Skipping segment status checks", tableNameWithType);
+    }
+    removeMetricsForTable(tableNameWithType);
+    context._disabledTables.add(tableNameWithType);
+  }
+
+  private void handleEmptyPartitionSet(String tableNameWithType, IdealState idealState) {
+    int nReplicasFromIdealState = 1;
+    try {
+      nReplicasFromIdealState = Integer.valueOf(idealState.getReplicas());
+    } catch (NumberFormatException e) {
+      // Ignore
+    }
+    _controllerMetrics
+        .setValueOfTableGauge(tableNameWithType, ControllerGauge.NUMBER_OF_REPLICAS, nReplicasFromIdealState);
+    _controllerMetrics.setValueOfTableGauge(tableNameWithType, ControllerGauge.PERCENT_OF_REPLICAS, 100);
+    _controllerMetrics.setValueOfTableGauge(tableNameWithType, ControllerGauge.PERCENT_SEGMENTS_AVAILABLE, 100);
+  }
+
+  private Set<String> getSegmentsExcludeReplaced(String tableNameWithType, IdealState idealState) {
     Set<String> segmentsExcludeReplaced = new HashSet<>(idealState.getPartitionSet());
     ZkHelixPropertyStore<ZNRecord> propertyStore = _pinotHelixResourceManager.getPropertyStore();
     SegmentLineage segmentLineage = SegmentLineageAccessHelper.getSegmentLineage(propertyStore, tableNameWithType);
     SegmentLineageUtils.filterSegmentsBasedOnLineageInPlace(segmentsExcludeReplaced, segmentLineage);
+    return segmentsExcludeReplaced;
+  }
+
+  private void updateSegmentCountMetrics(String tableNameWithType, IdealState idealState,
+      Set<String> segmentsExcludeReplaced) {
     _controllerMetrics
         .setValueOfTableGauge(tableNameWithType, ControllerGauge.IDEALSTATE_ZNODE_SIZE, idealState.toString().length());
     _controllerMetrics.setValueOfTableGauge(tableNameWithType, ControllerGauge.IDEALSTATE_ZNODE_BYTE_SIZE,
@@ -266,8 +293,16 @@ public class SegmentStatusChecker extends ControllerPeriodicTask<SegmentStatusCh
         (long) segmentsExcludeReplaced.size());
     _controllerMetrics.setValueOfTableGauge(tableNameWithType, ControllerGauge.SEGMENT_COUNT_INCLUDING_REPLACED,
         (long) (idealState.getPartitionSet().size()));
-    ExternalView externalView = _pinotHelixResourceManager.getTableExternalView(tableNameWithType);
+  }
 
+  private void updateSegmentStateMetrics(
+      String tableNameWithType,
+      TableConfig tableConfig,
+      Context context,
+      TableType tableType,
+      IdealState idealState,
+      Set<String> segmentsExcludeReplaced,
+      ExternalView externalView) {
     int nReplicasIdealMax = 0; // Keeps track of maximum number of replicas in ideal state
     int nReplicasExternal = -1; // Keeps track of minimum number of replicas in external view
     int nErrors = 0; // Keeps track of number of segments in error state
@@ -342,9 +377,33 @@ public class SegmentStatusChecker extends ControllerPeriodicTask<SegmentStatusCh
       nReplicasExternal =
           ((nReplicasExternal > nReplicas) || (nReplicasExternal == -1)) ? nReplicas : nReplicasExternal;
     }
-    if (nReplicasExternal == -1) {
-      nReplicasExternal = (nReplicasIdealMax == 0) ? 1 : 0;
-    }
+    nReplicasExternal = (nReplicasExternal == -1) ? ((nReplicasIdealMax == 0) ? 1 : 0) : nReplicasExternal;
+
+    updateSegmentMetrics(
+        tableNameWithType,
+        nReplicasExternal,
+        nReplicasIdealMax,
+        nErrors,
+        nNumOfReplicasLessThanIdeal,
+        nSegments,
+        nOffline,
+        tableCompressedSize);
+
+    logSegmentStatusWarnings(tableNameWithType, nOffline, nNumOfReplicasLessThanIdeal, nReplicasExternal,
+        nReplicasIdealMax);
+
+    handleRealtimeTable(tableType, tableConfig, tableNameWithType, idealState);
+  }
+
+  private void updateSegmentMetrics(
+      String tableNameWithType,
+      int nReplicasExternal,
+      int nReplicasIdealMax,
+      int nErrors,
+      int nNumOfReplicasLessThanIdeal,
+      int nSegments,
+      int nOffline,
+      long tableCompressedSize) {
     // Synchronization provided by Controller Gauge to make sure that only one thread updates the gauge
     _controllerMetrics.setValueOfTableGauge(tableNameWithType, ControllerGauge.NUMBER_OF_REPLICAS, nReplicasExternal);
     _controllerMetrics.setValueOfTableGauge(tableNameWithType, ControllerGauge.PERCENT_OF_REPLICAS,
@@ -356,7 +415,10 @@ public class SegmentStatusChecker extends ControllerPeriodicTask<SegmentStatusCh
         (nSegments > 0) ? (nSegments - nOffline) * 100 / nSegments : 100);
     _controllerMetrics.setValueOfTableGauge(tableNameWithType, ControllerGauge.TABLE_COMPRESSED_SIZE,
         tableCompressedSize);
+  }
 
+  private void logSegmentStatusWarnings(String tableNameWithType, int nOffline, int nNumOfReplicasLessThanIdeal,
+      int nReplicasExternal, int nReplicasIdealMax) {
     if (nOffline > 0) {
       LOGGER.warn("Table {} has {} segments with no online replicas", tableNameWithType, nOffline);
     }
@@ -368,14 +430,20 @@ public class SegmentStatusChecker extends ControllerPeriodicTask<SegmentStatusCh
       LOGGER.warn("Table {} has at least one segment running with only {} replicas, below replication threshold :{}",
           tableNameWithType, nReplicasExternal, nReplicasIdealMax);
     }
+  }
 
+  private void handleRealtimeTable(TableType tableType, TableConfig tableConfig, String tableNameWithType,
+      IdealState idealState) {
     if (tableType == TableType.REALTIME && tableConfig != null) {
       StreamConfig streamConfig =
           new StreamConfig(tableConfig.getTableName(), IngestionConfigUtils.getStreamConfigMap(tableConfig));
-      new MissingConsumingSegmentFinder(tableNameWithType, propertyStore, _controllerMetrics,
+      new MissingConsumingSegmentFinder(tableNameWithType, _pinotHelixResourceManager.getPropertyStore(),
+          _controllerMetrics,
           streamConfig).findAndEmitMetrics(idealState);
     }
   }
+
+//Refactoring end
 
   @Override
   protected void nonLeaderCleanup(List<String> tableNamesWithType) {

@@ -109,41 +109,55 @@ public class AggregationResultsBlock extends BaseResultsBlock {
     DataTableBuilder dataTableBuilder = DataTableBuilderFactory.getDataTableBuilder(dataSchema);
     boolean returnFinalResult = _queryContext.isServerReturnFinalResult();
     if (_queryContext.isNullHandlingEnabled()) {
-      RoaringBitmap[] nullBitmaps = new RoaringBitmap[numColumns];
-      for (int i = 0; i < numColumns; i++) {
-        nullBitmaps[i] = new RoaringBitmap();
-      }
-      dataTableBuilder.startRow();
-      for (int i = 0; i < numColumns; i++) {
-        Object result = _results.get(i);
-        if (result == null) {
-          result = columnDataTypes[i].getNullPlaceholder();
-          nullBitmaps[i].add(0);
-        }
-        if (!returnFinalResult) {
-          setIntermediateResult(dataTableBuilder, columnDataTypes, i, result);
-        } else {
-          setFinalResult(dataTableBuilder, columnDataTypes, i, result);
-        }
-      }
-      dataTableBuilder.finishRow();
-      for (RoaringBitmap nullBitmap : nullBitmaps) {
-        dataTableBuilder.setNullRowIds(nullBitmap);
-      }
+      populateDataTableWithNullHandling(dataTableBuilder, columnDataTypes, numColumns, returnFinalResult);
     } else {
-      dataTableBuilder.startRow();
-      for (int i = 0; i < numColumns; i++) {
-        Object result = _results.get(i);
-        if (!returnFinalResult) {
-          setIntermediateResult(dataTableBuilder, columnDataTypes, i, result);
-        } else {
-          result = _aggregationFunctions[i].extractFinalResult(result);
-          setFinalResult(dataTableBuilder, columnDataTypes, i, result);
-        }
-      }
-      dataTableBuilder.finishRow();
+      populateDataTableWithoutNullHandling(dataTableBuilder, columnDataTypes, numColumns, returnFinalResult);
     }
     return dataTableBuilder.build();
+  }
+
+  private void populateDataTableWithNullHandling(DataTableBuilder dataTableBuilder,
+      ColumnDataType[] columnDataTypes, int numColumns, boolean returnFinalResult)
+      throws IOException {
+    RoaringBitmap[] nullBitmaps = new RoaringBitmap[numColumns];
+    for (int i = 0; i < numColumns; i++) {
+      nullBitmaps[i] = new RoaringBitmap();
+    }
+    dataTableBuilder.startRow();
+    for (int i = 0; i < numColumns; i++) {
+      Object result = _results.get(i);
+      if (result == null) {
+        result = columnDataTypes[i].getNullPlaceholder();
+        nullBitmaps[i].add(0);
+      }
+      setResultInRow(dataTableBuilder, columnDataTypes, i, result, returnFinalResult);
+    }
+    dataTableBuilder.finishRow();
+    for (RoaringBitmap nullBitmap : nullBitmaps) {
+      dataTableBuilder.setNullRowIds(nullBitmap);
+    }
+  }
+
+  private void populateDataTableWithoutNullHandling(DataTableBuilder dataTableBuilder,
+      ColumnDataType[] columnDataTypes, int numColumns, boolean returnFinalResult)
+      throws IOException {
+    dataTableBuilder.startRow();
+    for (int i = 0; i < numColumns; i++) {
+      Object result = _results.get(i);
+      setResultInRow(dataTableBuilder, columnDataTypes, i, result, returnFinalResult);
+    }
+    dataTableBuilder.finishRow();
+  }
+
+  private void setResultInRow(DataTableBuilder dataTableBuilder, ColumnDataType[] columnDataTypes, int index,
+      Object result, boolean returnFinalResult)
+      throws IOException {
+    if (!returnFinalResult) {
+      setIntermediateResult(dataTableBuilder, columnDataTypes, index, result);
+    } else {
+      result = _aggregationFunctions[index].extractFinalResult(result);
+      setFinalResult(dataTableBuilder, columnDataTypes, index, result);
+    }
   }
 
   private void setIntermediateResult(DataTableBuilder dataTableBuilder, ColumnDataType[] columnDataTypes, int index,
@@ -213,4 +227,4 @@ public class AggregationResultsBlock extends BaseResultsBlock {
         throw new IllegalStateException("Illegal column data type in final result: " + columnDataType);
     }
   }
-}
+//Refactoring end

@@ -335,7 +335,7 @@ public class DebugResource {
     }
 
     int serverRequestTimeoutMs = _controllerConf.getServerAdminRequestTimeoutSeconds() * 1000;
-    final Map<String, List<String>> serverToSegments =
+    Map<String, List<String>> serverToSegments =
         _pinotHelixResourceManager.getServerToSegmentsMap(tableNameWithType);
 
     BiMap<String, String> serverToEndpoints;
@@ -349,32 +349,14 @@ public class DebugResource {
     Map<String, Map<String, SegmentServerDebugInfo>> segmentsDebugInfoFromServers =
         getSegmentsDebugInfoFromServers(tableNameWithType, serverToEndpoints, serverRequestTimeoutMs);
 
-    for (Map.Entry<String, Map<String, String>> segmentMapEntry : idealState.getRecord().getMapFields().entrySet()) {
+    for (Map.Entry<String, Map<String, String>> segmentMapEntry : idealState.getRecord().getMapFields()
+        .entrySet()) {
       String segmentName = segmentMapEntry.getKey();
       Map<String, String> segmentIsMap = segmentMapEntry.getValue();
 
-      Map<String, TableDebugInfo.SegmentState> segmentServerState = new HashMap<>();
-      for (Map.Entry<String, Map<String, SegmentServerDebugInfo>> segmentEntry : segmentsDebugInfoFromServers
-          .entrySet()) {
-        String instanceName = segmentEntry.getKey();
-        String isState = segmentIsMap.get(instanceName);
-
-        Map<String, String> evStateMap = (externalView != null) ? externalView.getStateMap(segmentName) : null;
-        String evState = (evStateMap != null) ? evStateMap.get(instanceName) : null;
-
-        if (evState != null) {
-          Map<String, SegmentServerDebugInfo> segmentServerDebugInfoMap = segmentEntry.getValue();
-          SegmentServerDebugInfo segmentServerDebugInfo = segmentServerDebugInfoMap.get(segmentName);
-
-          if (segmentServerDebugInfo != null && (verbosity > 0 || segmentHasErrors(segmentServerDebugInfo, evState))) {
-            segmentServerState.put(instanceName,
-                new TableDebugInfo.SegmentState(isState, evState, segmentServerDebugInfo.getSegmentSize(),
-                    segmentServerDebugInfo.getConsumerInfo(), segmentServerDebugInfo.getErrorInfo()));
-          }
-        } else {
-          segmentServerState.put(instanceName, new TableDebugInfo.SegmentState(isState, null, null, null, null));
-        }
-      }
+      Map<String, TableDebugInfo.SegmentState> segmentServerState =
+          calculateSegmentServerStates(segmentsDebugInfoFromServers, segmentName, segmentIsMap, externalView,
+              verbosity);
 
       if (!segmentServerState.isEmpty()) {
         result.add(new TableDebugInfo.SegmentDebugInfo(segmentName, segmentServerState));
@@ -383,6 +365,43 @@ public class DebugResource {
 
     return result;
   }
+
+  private Map<String, TableDebugInfo.SegmentState> calculateSegmentServerStates(
+      Map<String, Map<String, SegmentServerDebugInfo>> segmentsDebugInfoFromServers, String segmentName,
+      Map<String, String> segmentIsMap, ExternalView externalView, int verbosity) {
+    Map<String, TableDebugInfo.SegmentState> segmentServerState = new HashMap<>();
+    for (Map.Entry<String, Map<String, SegmentServerDebugInfo>> segmentEntry : segmentsDebugInfoFromServers
+        .entrySet()) {
+      String instanceName = segmentEntry.getKey();
+      String isState = segmentIsMap.get(instanceName);
+
+      Map<String, String> evStateMap = (externalView != null) ? externalView.getStateMap(segmentName) : null;
+      String evState = (evStateMap != null) ? evStateMap.get(instanceName) : null;
+
+      if (evState != null) {
+        calculateSegmentStateFromExternalView(segmentServerState, segmentEntry, instanceName, isState, evState,
+            segmentName, verbosity);
+      } else {
+        segmentServerState.put(instanceName, new TableDebugInfo.SegmentState(isState, null, null, null, null));
+      }
+    }
+    return segmentServerState;
+  }
+
+  private void calculateSegmentStateFromExternalView(Map<String, TableDebugInfo.SegmentState> segmentServerState,
+      Map.Entry<String, Map<String, SegmentServerDebugInfo>> segmentEntry, String instanceName, String isState,
+      String evState, String segmentName, int verbosity) {
+    Map<String, SegmentServerDebugInfo> segmentServerDebugInfoMap = segmentEntry.getValue();
+    SegmentServerDebugInfo segmentServerDebugInfo = segmentServerDebugInfoMap.get(segmentName);
+
+    if (segmentServerDebugInfo != null && (verbosity > 0 || segmentHasErrors(segmentServerDebugInfo,
+        evState))) {
+      segmentServerState.put(instanceName,
+          new TableDebugInfo.SegmentState(isState, evState, segmentServerDebugInfo.getSegmentSize(),
+              segmentServerDebugInfo.getConsumerInfo(), segmentServerDebugInfo.getErrorInfo()));
+    }
+  }
+//Refactoring end
 
   /**
    * Helper method to check if a segment has any errors/issues.

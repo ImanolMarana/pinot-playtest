@@ -60,39 +60,49 @@ public class CompileTimeFunctionsInvoker implements QueryRewriter {
     Function function = expression.getFunctionCall();
     List<Expression> operands = function.getOperands();
     int numOperands = operands.size();
-    boolean compilable = true;
-    for (int i = 0; i < numOperands; i++) {
-      Expression operand = invokeCompileTimeFunctionExpression(operands.get(i));
-      if (operand.getLiteral() == null) {
-        compilable = false;
-      }
-      operands.set(i, operand);
-    }
+    boolean compilable = areOperandsCompilable(operands);
     String functionName = function.getOperator();
     if (compilable) {
-      FunctionInfo functionInfo = FunctionRegistry.getFunctionInfo(functionName, numOperands);
-      if (functionInfo != null) {
-        Object[] arguments = new Object[numOperands];
-        for (int i = 0; i < numOperands; i++) {
-          arguments[i] = RequestUtils.getLiteralValue(function.getOperands().get(i).getLiteral());
-        }
-        try {
-          FunctionInvoker invoker = new FunctionInvoker(functionInfo);
-          Object result;
-          if (invoker.getMethod().isVarArgs()) {
-            result = invoker.invoke(new Object[] {arguments});
-          } else {
-            invoker.convertTypes(arguments);
-            result = invoker.invoke(arguments);
-          }
-          return RequestUtils.getLiteralExpression(result);
-        } catch (Exception e) {
-          throw new SqlCompilationException(
-              "Caught exception while invoking method: " + functionInfo.getMethod() + " with arguments: "
-                  + Arrays.toString(arguments), e);
-        }
-      }
+      return evaluateCompileTimeFunction(functionName, numOperands, function);
     }
     return expression;
   }
-}
+  
+  private static boolean areOperandsCompilable(List<Expression> operands) {
+    for (int i = 0; i < operands.size(); i++) {
+      Expression operand = invokeCompileTimeFunctionExpression(operands.get(i));
+      if (operand.getLiteral() == null) {
+        return false;
+      }
+      operands.set(i, operand);
+    }
+    return true;
+  }
+  
+  private static Expression evaluateCompileTimeFunction(String functionName, int numOperands, Function function) {
+    FunctionInfo functionInfo = FunctionRegistry.getFunctionInfo(functionName, numOperands);
+    if (functionInfo != null) {
+      Object[] arguments = new Object[numOperands];
+      for (int i = 0; i < numOperands; i++) {
+        arguments[i] = RequestUtils.getLiteralValue(function.getOperands().get(i).getLiteral());
+      }
+      try {
+        FunctionInvoker invoker = new FunctionInvoker(functionInfo);
+        Object result;
+        if (invoker.getMethod().isVarArgs()) {
+          result = invoker.invoke(new Object[] {arguments});
+        } else {
+          invoker.convertTypes(arguments);
+          result = invoker.invoke(arguments);
+        }
+        return RequestUtils.getLiteralExpression(result);
+      } catch (Exception e) {
+        throw new SqlCompilationException(
+            "Caught exception while invoking method: " + functionInfo.getMethod() + " with arguments: "
+                + Arrays.toString(arguments), e);
+      }
+    }
+    return null;
+  }
+
+//Refactoring end

@@ -195,127 +195,172 @@ public class FilterPlanNode implements PlanNode {
   private BaseFilterOperator constructPhysicalOperator(FilterContext filter, int numDocs) {
     switch (filter.getType()) {
       case AND:
-        List<FilterContext> childFilters = filter.getChildren();
-        List<BaseFilterOperator> childFilterOperators = new ArrayList<>(childFilters.size());
-        for (FilterContext childFilter : childFilters) {
-          BaseFilterOperator childFilterOperator = constructPhysicalOperator(childFilter, numDocs);
-          if (childFilterOperator.isResultEmpty()) {
-            // Return empty filter operator if any of the child filter operator's result is empty
-            return EmptyFilterOperator.getInstance();
-          } else if (!childFilterOperator.isResultMatchingAll()) {
-            // Remove child filter operators that match all records
-            childFilterOperators.add(childFilterOperator);
-          }
-        }
-        return FilterOperatorUtils.getAndFilterOperator(_queryContext, childFilterOperators, numDocs);
+        return constructAndFilterOperator(filter, numDocs);
       case OR:
-        childFilters = filter.getChildren();
-        childFilterOperators = new ArrayList<>(childFilters.size());
-        for (FilterContext childFilter : childFilters) {
-          BaseFilterOperator childFilterOperator = constructPhysicalOperator(childFilter, numDocs);
-          if (childFilterOperator.isResultMatchingAll()) {
-            // Return match all filter operator if any of the child filter operator matches all records
-            return new MatchAllFilterOperator(numDocs);
-          } else if (!childFilterOperator.isResultEmpty()) {
-            // Remove child filter operators whose result is empty
-            childFilterOperators.add(childFilterOperator);
-          }
-        }
-        return FilterOperatorUtils.getOrFilterOperator(_queryContext, childFilterOperators, numDocs);
+        return constructOrFilterOperator(filter, numDocs);
       case NOT:
-        childFilters = filter.getChildren();
-        assert childFilters.size() == 1;
-        BaseFilterOperator childFilterOperator = constructPhysicalOperator(childFilters.get(0), numDocs);
-        return FilterOperatorUtils.getNotFilterOperator(_queryContext, childFilterOperator, numDocs);
+        return constructNotFilterOperator(filter, numDocs);
       case PREDICATE:
-        Predicate predicate = filter.getPredicate();
-        ExpressionContext lhs = predicate.getLhs();
-        if (lhs.getType() == ExpressionContext.Type.FUNCTION) {
-          if (canApplyH3IndexForDistanceCheck(predicate, lhs.getFunction())) {
-            return new H3IndexFilterOperator(_indexSegment, _queryContext, predicate, numDocs);
-          } else if (canApplyH3IndexForInclusionCheck(predicate, lhs.getFunction())) {
-            return new H3InclusionIndexFilterOperator(_indexSegment, _queryContext, predicate, numDocs);
-          } else {
-            // TODO: ExpressionFilterOperator does not support predicate types without PredicateEvaluator (TEXT_MATCH)
-            return new ExpressionFilterOperator(_indexSegment, _queryContext, predicate, numDocs);
-          }
-        } else {
-          String column = lhs.getIdentifier();
-          DataSource dataSource = _indexSegment.getDataSource(column);
-          PredicateEvaluator predicateEvaluator;
-          switch (predicate.getType()) {
-            case TEXT_CONTAINS:
-              TextIndexReader textIndexReader = dataSource.getTextIndex();
-              if (!(textIndexReader instanceof NativeTextIndexReader)
-                  && !(textIndexReader instanceof NativeMutableTextIndex)) {
-                throw new UnsupportedOperationException("TEXT_CONTAINS is supported only on native text index");
-              }
-              return new TextContainsFilterOperator(textIndexReader, (TextContainsPredicate) predicate, numDocs);
-            case TEXT_MATCH:
-              textIndexReader = dataSource.getTextIndex();
-              Preconditions.checkState(textIndexReader != null,
-                  "Cannot apply TEXT_MATCH on column: %s without text index", column);
-              // We could check for real time and segment Lucene reader, but easier to check the other way round
-              if (textIndexReader instanceof NativeTextIndexReader
-                  || textIndexReader instanceof NativeMutableTextIndex) {
-                throw new UnsupportedOperationException("TEXT_MATCH is not supported on native text index");
-              }
-              return new TextMatchFilterOperator(textIndexReader, (TextMatchPredicate) predicate, numDocs);
-            case REGEXP_LIKE:
-              // FST Index is available only for rolled out segments. So, we use different evaluator for rolled out and
-              // consuming segments.
-              //
-              // Rolled out segments (immutable): FST Index reader is available use FSTBasedEvaluator
-              // else use regular flow of getting predicate evaluator.
-              //
-              // Consuming segments: When FST is enabled, use AutomatonBasedEvaluator so that regexp matching logic is
-              // similar to that of FSTBasedEvaluator, else use regular flow of getting predicate evaluator.
-              if (dataSource.getFSTIndex() != null) {
-                predicateEvaluator =
-                    FSTBasedRegexpPredicateEvaluatorFactory.newFSTBasedEvaluator((RegexpLikePredicate) predicate,
-                        dataSource.getFSTIndex(), dataSource.getDictionary());
-              } else {
-                predicateEvaluator =
-                    PredicateEvaluatorProvider.getPredicateEvaluator(predicate, dataSource.getDictionary(),
-                        dataSource.getDataSourceMetadata().getDataType());
-              }
-              _predicateEvaluators.add(Pair.of(predicate, predicateEvaluator));
-              return FilterOperatorUtils.getLeafFilterOperator(_queryContext, predicateEvaluator, dataSource, numDocs);
-            case JSON_MATCH:
-              JsonIndexReader jsonIndex = dataSource.getJsonIndex();
-              Preconditions.checkState(jsonIndex != null, "Cannot apply JSON_MATCH on column: %s without json index",
-                  column);
-              return new JsonMatchFilterOperator(jsonIndex, (JsonMatchPredicate) predicate, numDocs);
-            case VECTOR_SIMILARITY:
-              VectorIndexReader vectorIndex = dataSource.getVectorIndex();
-              Preconditions.checkState(vectorIndex != null,
-                  "Cannot apply VECTOR_SIMILARITY on column: %s without vector index", column);
-              return new VectorSimilarityFilterOperator(vectorIndex, (VectorSimilarityPredicate) predicate, numDocs);
-            case IS_NULL:
-              NullValueVectorReader nullValueVector = dataSource.getNullValueVector();
-              if (nullValueVector != null) {
-                return new BitmapBasedFilterOperator(nullValueVector.getNullBitmap(), false, numDocs);
-              } else {
-                return EmptyFilterOperator.getInstance();
-              }
-            case IS_NOT_NULL:
-              nullValueVector = dataSource.getNullValueVector();
-              if (nullValueVector != null) {
-                return new BitmapBasedFilterOperator(nullValueVector.getNullBitmap(), true, numDocs);
-              } else {
-                return new MatchAllFilterOperator(numDocs);
-              }
-            default:
-              predicateEvaluator =
-                  PredicateEvaluatorProvider.getPredicateEvaluator(predicate, dataSource, _queryContext);
-              _predicateEvaluators.add(Pair.of(predicate, predicateEvaluator));
-              return FilterOperatorUtils.getLeafFilterOperator(_queryContext, predicateEvaluator, dataSource, numDocs);
-          }
-        }
+        return constructPredicateFilterOperator(filter, numDocs);
       case CONSTANT:
         return filter.isConstantTrue() ? new MatchAllFilterOperator(numDocs) : EmptyFilterOperator.getInstance();
       default:
         throw new IllegalStateException();
     }
+  }
+
+  private BaseFilterOperator constructAndFilterOperator(FilterContext filter, int numDocs) {
+    List<FilterContext> childFilters = filter.getChildren();
+    List<BaseFilterOperator> childFilterOperators = new ArrayList<>(childFilters.size());
+    for (FilterContext childFilter : childFilters) {
+      BaseFilterOperator childFilterOperator = constructPhysicalOperator(childFilter, numDocs);
+      if (childFilterOperator.isResultEmpty()) {
+        return EmptyFilterOperator.getInstance();
+      } else if (!childFilterOperator.isResultMatchingAll()) {
+        childFilterOperators.add(childFilterOperator);
+      }
+    }
+    return FilterOperatorUtils.getAndFilterOperator(_queryContext, childFilterOperators, numDocs);
+  }
+
+  private BaseFilterOperator constructOrFilterOperator(FilterContext filter, int numDocs) {
+    List<FilterContext> childFilters = filter.getChildren();
+    List<BaseFilterOperator> childFilterOperators = new ArrayList<>(childFilters.size());
+    for (FilterContext childFilter : childFilters) {
+      BaseFilterOperator childFilterOperator = constructPhysicalOperator(childFilter, numDocs);
+      if (childFilterOperator.isResultMatchingAll()) {
+        return new MatchAllFilterOperator(numDocs);
+      } else if (!childFilterOperator.isResultEmpty()) {
+        childFilterOperators.add(childFilterOperator);
+      }
+    }
+    return FilterOperatorUtils.getOrFilterOperator(_queryContext, childFilterOperators, numDocs);
+  }
+
+  private BaseFilterOperator constructNotFilterOperator(FilterContext filter, int numDocs) {
+    List<FilterContext> childFilters = filter.getChildren();
+    assert childFilters.size() == 1;
+    BaseFilterOperator childFilterOperator = constructPhysicalOperator(childFilters.get(0), numDocs);
+    return FilterOperatorUtils.getNotFilterOperator(_queryContext, childFilterOperator, numDocs);
+  }
+
+  private BaseFilterOperator constructPredicateFilterOperator(FilterContext filter, int numDocs) {
+    Predicate predicate = filter.getPredicate();
+    ExpressionContext lhs = predicate.getLhs();
+    if (lhs.getType() == ExpressionContext.Type.FUNCTION) {
+      if (canApplyH3IndexForDistanceCheck(predicate, lhs.getFunction())) {
+        return new H3IndexFilterOperator(_indexSegment, _queryContext, predicate, numDocs);
+      } else if (canApplyH3IndexForInclusionCheck(predicate, lhs.getFunction())) {
+        return new H3InclusionIndexFilterOperator(_indexSegment, _queryContext, predicate, numDocs);
+      } else {
+        // TODO: ExpressionFilterOperator does not support predicate types without PredicateEvaluator (TEXT_MATCH)
+        return new ExpressionFilterOperator(_indexSegment, _queryContext, predicate, numDocs);
+      }
+    } else {
+      return constructLeafFilterOperator(predicate, lhs.getIdentifier(), numDocs);
+    }
+  }
+
+  private BaseFilterOperator constructLeafFilterOperator(Predicate predicate, String column, int numDocs) {
+    DataSource dataSource = _indexSegment.getDataSource(column);
+    switch (predicate.getType()) {
+      case TEXT_CONTAINS:
+        return constructTextContainsFilterOperator(dataSource, predicate, numDocs);
+      case TEXT_MATCH:
+        return constructTextMatchFilterOperator(dataSource, predicate, numDocs, column);
+      case REGEXP_LIKE:
+        return constructRegexpLikeFilterOperator(dataSource, predicate, numDocs);
+      case JSON_MATCH:
+        return constructJsonMatchFilterOperator(dataSource, predicate, numDocs, column);
+      case VECTOR_SIMILARITY:
+        return constructVectorSimilarityFilterOperator(dataSource, predicate, numDocs, column);
+      case IS_NULL:
+        return constructIsNullFilterOperator(dataSource, numDocs);
+      case IS_NOT_NULL:
+        return constructIsNotNullFilterOperator(dataSource, numDocs);
+      default:
+        PredicateEvaluator predicateEvaluator =
+            PredicateEvaluatorProvider.getPredicateEvaluator(predicate, dataSource, _queryContext);
+        _predicateEvaluators.add(Pair.of(predicate, predicateEvaluator));
+        return FilterOperatorUtils.getLeafFilterOperator(_queryContext, predicateEvaluator, dataSource,
+            numDocs);
+    }
+  }
+
+  private BaseFilterOperator constructTextContainsFilterOperator(DataSource dataSource, Predicate predicate,
+      int numDocs) {
+    TextIndexReader textIndexReader = dataSource.getTextIndex();
+    if (!(textIndexReader instanceof NativeTextIndexReader)
+        && !(textIndexReader instanceof NativeMutableTextIndex)) {
+      throw new UnsupportedOperationException("TEXT_CONTAINS is supported only on native text index");
+    }
+    return new TextContainsFilterOperator(textIndexReader, (TextContainsPredicate) predicate, numDocs);
+  }
+
+  private BaseFilterOperator constructTextMatchFilterOperator(DataSource dataSource, Predicate predicate,
+      int numDocs, String column) {
+    TextIndexReader textIndexReader = dataSource.getTextIndex();
+    Preconditions.checkState(textIndexReader != null,
+        "Cannot apply TEXT_MATCH on column: %s without text index", column);
+    // We could check for real time and segment Lucene reader, but easier to check the other way round
+    if (textIndexReader instanceof NativeTextIndexReader
+        || textIndexReader instanceof NativeMutableTextIndex) {
+      throw new UnsupportedOperationException("TEXT_MATCH is not supported on native text index");
+    }
+    return new TextMatchFilterOperator(textIndexReader, (TextMatchPredicate) predicate, numDocs);
+  }
+
+  private BaseFilterOperator constructRegexpLikeFilterOperator(DataSource dataSource, Predicate predicate,
+      int numDocs) {
+    PredicateEvaluator predicateEvaluator;
+    if (dataSource.getFSTIndex() != null) {
+      predicateEvaluator =
+          FSTBasedRegexpPredicateEvaluatorFactory.newFSTBasedEvaluator((RegexpLikePredicate) predicate,
+              dataSource.getFSTIndex(), dataSource.getDictionary());
+    } else {
+      predicateEvaluator =
+          PredicateEvaluatorProvider.getPredicateEvaluator(predicate, dataSource.getDictionary(),
+              dataSource.getDataSourceMetadata().getDataType());
+    }
+    _predicateEvaluators.add(Pair.of(predicate, predicateEvaluator));
+    return FilterOperatorUtils.getLeafFilterOperator(_queryContext, predicateEvaluator, dataSource,
+        numDocs);
+  }
+
+  private BaseFilterOperator constructJsonMatchFilterOperator(DataSource dataSource, Predicate predicate,
+      int numDocs, String column) {
+    JsonIndexReader jsonIndex = dataSource.getJsonIndex();
+    Preconditions.checkState(jsonIndex != null, "Cannot apply JSON_MATCH on column: %s without json index",
+        column);
+    return new JsonMatchFilterOperator(jsonIndex, (JsonMatchPredicate) predicate, numDocs);
+  }
+
+  private BaseFilterOperator constructVectorSimilarityFilterOperator(DataSource dataSource,
+      Predicate predicate, int numDocs, String column) {
+    VectorIndexReader vectorIndex = dataSource.getVectorIndex();
+    Preconditions.checkState(vectorIndex != null,
+        "Cannot apply VECTOR_SIMILARITY on column: %s without vector index", column);
+    return new VectorSimilarityFilterOperator(vectorIndex, (VectorSimilarityPredicate) predicate,
+        numDocs);
+  }
+
+  private BaseFilterOperator constructIsNullFilterOperator(DataSource dataSource, int numDocs) {
+    NullValueVectorReader nullValueVector = dataSource.getNullValueVector();
+    if (nullValueVector != null) {
+      return new BitmapBasedFilterOperator(nullValueVector.getNullBitmap(), false, numDocs);
+    } else {
+      return EmptyFilterOperator.getInstance();
+    }
+  }
+
+  private BaseFilterOperator constructIsNotNullFilterOperator(DataSource dataSource, int numDocs) {
+    NullValueVectorReader nullValueVector = dataSource.getNullValueVector();
+    if (nullValueVector != null) {
+      return new BitmapBasedFilterOperator(nullValueVector.getNullBitmap(), true, numDocs);
+    } else {
+      return new MatchAllFilterOperator(numDocs);
+    }
+  }
+//Refactoring end
   }
 }

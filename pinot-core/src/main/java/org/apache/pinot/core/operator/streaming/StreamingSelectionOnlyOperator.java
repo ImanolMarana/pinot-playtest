@@ -101,17 +101,20 @@ public class StreamingSelectionOnlyOperator extends BaseOperator<SelectionResult
     int numDocs = valueBlock.getNumDocs();
     int numDocsToReturn = Math.min(_limit - _numDocsScanned, numDocs);
     List<Object[]> rows = new ArrayList<>(numDocsToReturn);
+    rows = populateRows(numDocsToReturn, blockValueFetcher);
+    _numDocsScanned += numDocs;
+    return new SelectionResultsBlock(_dataSchema, rows, _queryContext);
+  }
+
+  private List<Object[]> populateRows(int numDocsToReturn, RowBasedBlockValueFetcher blockValueFetcher) {
+    List<Object[]> rows = new ArrayList<>(numDocsToReturn);
     if (_nullHandlingEnabled) {
-      for (int i = 0; i < numExpressions; i++) {
+      for (int i = 0; i < _expressions.size(); i++) {
         _nullBitmaps[i] = _blockValSets[i].getNullBitmap();
       }
       for (int docId = 0; docId < numDocsToReturn; docId++) {
         Object[] values = blockValueFetcher.getRow(docId);
-        for (int colId = 0; colId < numExpressions; colId++) {
-          if (_nullBitmaps[colId] != null && _nullBitmaps[colId].contains(docId)) {
-            values[colId] = null;
-          }
-        }
+        values = handleNullValues(values, docId);
         rows.add(values);
       }
     } else {
@@ -119,9 +122,18 @@ public class StreamingSelectionOnlyOperator extends BaseOperator<SelectionResult
         rows.add(blockValueFetcher.getRow(i));
       }
     }
-    _numDocsScanned += numDocs;
-    return new SelectionResultsBlock(_dataSchema, rows, _queryContext);
+    return rows;
   }
+
+  private Object[] handleNullValues(Object[] values, int docId) {
+    for (int colId = 0; colId < _expressions.size(); colId++) {
+      if (_nullBitmaps[colId] != null && _nullBitmaps[colId].contains(docId)) {
+        values[colId] = null;
+      }
+    }
+    return values;
+  }
+//Refactoring end
 
   @Override
   public String toExplainString() {

@@ -51,29 +51,40 @@ public class DistinctPlanNode implements PlanNode {
     List<ExpressionContext> expressions = _queryContext.getSelectExpressions();
 
     // Use dictionary to solve the query if possible
-    if (_queryContext.getFilter() == null && expressions.size() == 1) {
-      String column = expressions.get(0).getIdentifier();
-      if (column != null) {
-        DataSource dataSource = _indexSegment.getDataSource(column);
-        if (dataSource.getDictionary() != null) {
-          if (!_queryContext.isNullHandlingEnabled()) {
-            return new DictionaryBasedDistinctOperator(dataSource, _queryContext);
-          }
-          // If nullHandlingEnabled is set to true, and the column contains null values, call DistinctOperator instead
-          // of DictionaryBasedDistinctOperator since nullValueVectorReader is a form of a filter.
-          // TODO: reserve special value in dictionary (e.g. -1) for null in the future so
-          //  DictionaryBasedDistinctOperator can be reused since it is more efficient than DistinctOperator for
-          //  dictionary-encoded columns.
-          NullValueVectorReader nullValueReader = dataSource.getNullValueVector();
-          if (nullValueReader == null || nullValueReader.getNullBitmap().isEmpty()) {
-            return new DictionaryBasedDistinctOperator(dataSource, _queryContext);
-          }
-        }
-      }
+    if (canUseDictionary(expressions)) {
+      return createDictionaryBasedOperator(expressions);
     }
 
     BaseProjectOperator<?> projectOperator =
         new ProjectPlanNode(_segmentContext, _queryContext, expressions, DocIdSetPlanNode.MAX_DOC_PER_CALL).run();
     return new DistinctOperator(_indexSegment, _queryContext, projectOperator);
   }
+
+  private boolean canUseDictionary(List<ExpressionContext> expressions) {
+    return _queryContext.getFilter() == null && expressions.size() == 1
+        && expressions.get(0).getIdentifier() != null;
+  }
+
+  private Operator<DistinctResultsBlock> createDictionaryBasedOperator(List<ExpressionContext> expressions) {
+    String column = expressions.get(0).getIdentifier();
+    DataSource dataSource = _indexSegment.getDataSource(column);
+    if (dataSource.getDictionary() != null) {
+      if (!_queryContext.isNullHandlingEnabled()) {
+        return new DictionaryBasedDistinctOperator(dataSource, _queryContext);
+      }
+      // If nullHandlingEnabled is set to true, and the column contains null values, call
+      // DistinctOperator instead
+      // of DictionaryBasedDistinctOperator since nullValueVectorReader is a form of a filter.
+      // TODO: reserve special value in dictionary (e.g. -1) for null in the future so
+      //  DictionaryBasedDistinctOperator can be reused since it is more efficient than
+      //  DistinctOperator for
+      //  dictionary-encoded columns.
+      NullValueVectorReader nullValueReader = dataSource.getNullValueVector();
+      if (nullValueReader == null || nullValueReader.getNullBitmap().isEmpty()) {
+        return new DictionaryBasedDistinctOperator(dataSource, _queryContext);
+      }
+    }
+    return null;
+  }
+//Refactoring end
 }

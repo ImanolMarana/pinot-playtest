@@ -162,50 +162,7 @@ public class Murmur3PartitionFunction implements PartitionFunction {
 
     // CHECKSTYLE:OFF
     for (int i = 0; i < stringLen; i++) {
-      char c1 = s.charAt(i);
-      int cp;
-      if (!Character.isSurrogate(c1)) {
-        cp = c1;
-      } else if (Character.isHighSurrogate(c1)) {
-        if (i + 1 < stringLen) {
-          char c2 = s.charAt(i + 1);
-          if (Character.isLowSurrogate(c2)) {
-            i++;
-            cp = Character.toCodePoint(c1, c2);
-          } else {
-            cp = INVALID_CHAR;
-          }
-        } else {
-          cp = INVALID_CHAR;
-        }
-      } else {
-        cp = INVALID_CHAR;
-      }
-
-      if (cp <= 0x7f) {
-        addByte(state, (byte) cp, byteLen++);
-      } else if (cp <= 0x07ff) {
-        byte b1 = (byte) (0xc0 | (0x1f & (cp >> 6)));
-        byte b2 = (byte) (0x80 | (0x3f & cp));
-        addByte(state, b1, byteLen++);
-        addByte(state, b2, byteLen++);
-      } else if (cp <= 0xffff) {
-        byte b1 = (byte) (0xe0 | (0x0f & (cp >> 12)));
-        byte b2 = (byte) (0x80 | (0x3f & (cp >> 6)));
-        byte b3 = (byte) (0x80 | (0x3f & cp));
-        addByte(state, b1, byteLen++);
-        addByte(state, b2, byteLen++);
-        addByte(state, b3, byteLen++);
-      } else {
-        byte b1 = (byte) (0xf0 | (0x07 & (cp >> 18)));
-        byte b2 = (byte) (0x80 | (0x3f & (cp >> 12)));
-        byte b3 = (byte) (0x80 | (0x3f & (cp >> 6)));
-        byte b4 = (byte) (0x80 | (0x3f & cp));
-        addByte(state, b1, byteLen++);
-        addByte(state, b2, byteLen++);
-        addByte(state, b3, byteLen++);
-        addByte(state, b4, byteLen++);
-      }
+      byteLen = addUtf8Character(state, s, i, byteLen);
     }
 
     long savedK1 = state._k1;
@@ -260,6 +217,56 @@ public class Murmur3PartitionFunction implements PartitionFunction {
 
     return (int) (state._h1 >> 32);
   }
+
+  private static int addUtf8Character(State state, String s, int i, int byteLen) {
+    char c1 = s.charAt(i);
+    int cp;
+    if (!Character.isSurrogate(c1)) {
+      cp = c1;
+    } else if (Character.isHighSurrogate(c1)) {
+      if (i + 1 < s.length()) {
+        char c2 = s.charAt(i + 1);
+        if (Character.isLowSurrogate(c2)) {
+          i++;
+          cp = Character.toCodePoint(c1, c2);
+        } else {
+          cp = INVALID_CHAR;
+        }
+      } else {
+        cp = INVALID_CHAR;
+      }
+    } else {
+      cp = INVALID_CHAR;
+    }
+
+    if (cp <= 0x7f) {
+      addByte(state, (byte) cp, byteLen++);
+    } else if (cp <= 0x07ff) {
+      byte b1 = (byte) (0xc0 | (0x1f & (cp >> 6)));
+      byte b2 = (byte) (0x80 | (0x3f & cp));
+      addByte(state, b1, byteLen++);
+      addByte(state, b2, byteLen++);
+    } else if (cp <= 0xffff) {
+      byte b1 = (byte) (0xe0 | (0x0f & (cp >> 12)));
+      byte b2 = (byte) (0x80 | (0x3f & (cp >> 6)));
+      byte b3 = (byte) (0x80 | (0x3f & cp));
+      addByte(state, b1, byteLen++);
+      addByte(state, b2, byteLen++);
+      addByte(state, b3, byteLen++);
+    } else {
+      byte b1 = (byte) (0xf0 | (0x07 & (cp >> 18)));
+      byte b2 = (byte) (0x80 | (0x3f & (cp >> 12)));
+      byte b3 = (byte) (0x80 | (0x3f & (cp >> 6)));
+      byte b4 = (byte) (0x80 | (0x3f & cp));
+      addByte(state, b1, byteLen++);
+      addByte(state, b2, byteLen++);
+      addByte(state, b3, byteLen++);
+      addByte(state, b4, byteLen++);
+    }
+    return byteLen;
+  }
+
+//Refactoring end
 
   private static void addByte(State state, byte b, int len) {
     int shift = (len & 0x7) * 8;

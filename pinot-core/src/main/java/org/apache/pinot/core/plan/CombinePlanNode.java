@@ -84,74 +84,91 @@ public class CombinePlanNode implements PlanNode {
     InvocationRecording recording = Tracing.activeRecording();
     int numPlanNodes = _planNodes.size();
     recording.setNumChildren(numPlanNodes);
-    List<Operator> operators = new ArrayList<>(numPlanNodes);
+    List<Operator> operators = executePlanNodes(recording, numPlanNodes);
 
+    return createCombineOperator(operators);
+  }
+
+  private List<Operator> executePlanNodes(InvocationRecording recording, int numPlanNodes) {
+    List<Operator> operators = new ArrayList<>(numPlanNodes);
     if (numPlanNodes <= TARGET_NUM_PLANS_PER_THREAD) {
       // Small number of plan nodes, run them sequentially
       for (PlanNode planNode : _planNodes) {
         operators.add(planNode.run());
       }
     } else {
-      // Large number of plan nodes, run them in parallel
-      // NOTE: Even if we get single executor thread, still run it using a separate thread so that the timeout can be
-      //       honored
-      int numTasks = QueryMultiThreadingUtils.getNumTasks(numPlanNodes, TARGET_NUM_PLANS_PER_THREAD,
-          _queryContext.getMaxExecutionThreads());
-      recording.setNumTasks(numTasks);
-      QueryMultiThreadingUtils.runTasksWithDeadline(numTasks, index -> {
-        List<Operator> ops = new ArrayList<>();
-        for (int i = index; i < numPlanNodes; i += numTasks) {
-          ops.add(_planNodes.get(i).run());
-        }
-        return ops;
-      }, taskRes -> {
-        if (taskRes != null) {
-          operators.addAll(taskRes);
-        }
-      }, e -> {
-        // Future object will throw ExecutionException for execution exception, need to check the cause to determine
-        // whether it is caused by bad query
-        Throwable cause = e.getCause();
-        if (cause instanceof BadQueryRequestException) {
-          throw (BadQueryRequestException) cause;
-        }
-        if (e instanceof InterruptedException) {
-          throw new QueryCancelledException("Cancelled while running CombinePlanNode", e);
-        }
-        throw new RuntimeException("Caught exception while running CombinePlanNode.", e);
-      }, _executorService, _queryContext.getEndTimeMs());
+      operators.addAll(runPlanNodesInParallel(recording, numPlanNodes));
     }
+    return operators;
+  }
 
+  private List<Operator> runPlanNodesInParallel(InvocationRecording recording, int numPlanNodes) {
+    // Large number of plan nodes, run them in parallel
+    // NOTE: Even if we get single executor thread, still run it using a separate thread so that the timeout can be
+    //       honored
+    int numTasks = QueryMultiThreadingUtils.getNumTasks(numPlanNodes, TARGET_NUM_PLANS_PER_THREAD,
+        _queryContext.getMaxExecutionThreads());
+    recording.setNumTasks(numTasks);
+    return QueryMultiThreadingUtils.runTasksWithDeadline(numTasks, index -> {
+      List<Operator> ops = new ArrayList<>();
+      for (int i = index; i < numPlanNodes; i += numTasks) {
+        ops.add(_planNodes.get(i).run());
+      }
+      return ops;
+    }, taskRes -> (taskRes != null) ? operators.addAll(taskRes) : null, e -> {
+      // Future object will throw ExecutionException for execution exception, need to check the cause to determine
+      // whether it is caused by bad query
+      Throwable cause = e.getCause();
+      if (cause instanceof BadQueryRequestException) {
+        throw (BadQueryRequestException) cause;
+      }
+      if (e instanceof InterruptedException) {
+        throw new QueryCancelledException("Cancelled while running CombinePlanNode", e);
+      }
+      throw new RuntimeException("Caught exception while running CombinePlanNode.", e);
+    }, _executorService, _queryContext.getEndTimeMs());
+  }
+
+
+  private BaseCombineOperator createCombineOperator(List<Operator> operators) {
     if (_streamer != null && QueryContextUtils.isSelectionOnlyQuery(_queryContext) && _queryContext.getLimit() != 0) {
       // Use streaming operator only for non-empty selection-only query
       return new StreamingSelectionOnlyCombineOperator(operators, _queryContext, _executorService);
     } else {
       if (QueryContextUtils.isAggregationQuery(_queryContext)) {
-        if (_queryContext.getGroupByExpressions() == null) {
-          // Aggregation only
-          return new AggregationCombineOperator(operators, _queryContext, _executorService);
-        } else {
-          // Aggregation group-by
-          return new GroupByCombineOperator(operators, _queryContext, _executorService);
-        }
+        return getAggregationCombineOperator(operators);
       } else if (QueryContextUtils.isSelectionQuery(_queryContext)) {
-        if (_queryContext.getLimit() == 0 || _queryContext.getOrderByExpressions() == null) {
-          // Selection only
-          return new SelectionOnlyCombineOperator(operators, _queryContext, _executorService);
-        } else {
-          // Selection order-by
-          List<OrderByExpressionContext> orderByExpressions = _queryContext.getOrderByExpressions();
-          assert orderByExpressions != null;
-          if (orderByExpressions.get(0).getExpression().getType() == ExpressionContext.Type.IDENTIFIER) {
-            return new MinMaxValueBasedSelectionOrderByCombineOperator(operators, _queryContext, _executorService);
-          } else {
-            return new SelectionOrderByCombineOperator(operators, _queryContext, _executorService);
-          }
-        }
+        return getSelectionCombineOperator(operators);
       } else {
         assert QueryContextUtils.isDistinctQuery(_queryContext);
         return new DistinctCombineOperator(operators, _queryContext, _executorService);
       }
     }
   }
-}
+
+  private BaseCombineOperator getAggregationCombineOperator(List<Operator> operators) {
+    if (_queryContext.getGroupByExpressions() == null) {
+      // Aggregation only
+      return new AggregationCombineOperator(operators, _queryContext, _executorService);
+    } else {
+      // Aggregation group-by
+      return new GroupByCombineOperator(operators, _queryContext, _executorService);
+    }
+  }
+
+  private BaseCombineOperator getSelectionCombineOperator(List<Operator> operators) {
+    if (_queryContext.getLimit() == 0 || _queryContext.getOrderByExpressions() == null) {
+      // Selection only
+      return new SelectionOnlyCombineOperator(operators, _queryContext, _executorService);
+    } else {
+      // Selection order-by
+      List<OrderByExpressionContext> orderByExpressions = _queryContext.getOrderByExpressions();
+      assert orderByExpressions != null;
+      if (orderByExpressions.get(0).getExpression().getType() == ExpressionContext.Type.IDENTIFIER) {
+        return new MinMaxValueBasedSelectionOrderByCombineOperator(operators, _queryContext, _executorService);
+      } else {
+        return new SelectionOrderByCombineOperator(operators, _queryContext, _executorService);
+      }
+    }
+  }
+//Refactoring end

@@ -272,11 +272,21 @@ public class MirrorServerSetInstancePartitionSelector extends InstancePartitionS
     createMirrorServerListFromPreconfiguredInstancePartition();
     createMirrorServerListLookupTablesFromPreconfiguredInstancePartition();
     createListAndLookupTablesFromExistingInstancePartitions();
+
     Set<Integer> usedPreconfiguredInstanceOffsets = new HashSet<>();
     Map<Integer, Map.Entry<Integer, Long>> existingOffsetToResultTuple = new HashMap<>();
 
-    // For each instance offset, find the mirrored server that is most similar to the existing mirrored server
-    // set. If this mirrored server is not used, add it to the result list.
+    findMostSimilarMirrorServers(usedPreconfiguredInstanceOffsets, existingOffsetToResultTuple);
+
+    handleDownliftCase(existingOffsetToResultTuple, usedPreconfiguredInstanceOffsets);
+
+    addRemainingInstances(existingOffsetToResultTuple, usedPreconfiguredInstanceOffsets);
+
+    updateInstancePartitions(instancePartitions, existingOffsetToResultTuple);
+  }
+
+  private void findMostSimilarMirrorServers(Set<Integer> usedPreconfiguredInstanceOffsets,
+      Map<Integer, Map.Entry<Integer, Long>> existingOffsetToResultTuple) {
     for (int j = 0; j < _numExistingInstancesPerReplicaGroup; j++) {
       List<String> existingMirroredServers = _existingMirroredServerLists.get(j);
       int finalJ = j;
@@ -293,9 +303,11 @@ public class MirrorServerSetInstancePartitionSelector extends InstancePartitionS
             usedPreconfiguredInstanceOffsets.add(e.getKey());
           });
     }
+  }
 
+  private void handleDownliftCase(Map<Integer, Map.Entry<Integer, Long>> existingOffsetToResultTuple,
+      Set<Integer> usedPreconfiguredInstanceOffsets) {
     if (_numExistingInstancesPerReplicaGroup > _numTargetInstancesPerReplicaGroup) {
-      // If this is a downlift case
       List<Map.Entry<Integer, Long>> collect = existingOffsetToResultTuple.values()
           .stream()
           .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
@@ -309,10 +321,11 @@ public class MirrorServerSetInstancePartitionSelector extends InstancePartitionS
         usedPreconfiguredInstanceOffsets.add(collect.get(j).getKey());
       }
     }
+  }
 
+  private void addRemainingInstances(Map<Integer, Map.Entry<Integer, Long>> existingOffsetToResultTuple,
+      Set<Integer> usedPreconfiguredInstanceOffsets) {
     if (existingOffsetToResultTuple.size() < _numTargetInstancesPerReplicaGroup) {
-      // If the number of instances selected from the result list is less than the target number
-      // of instances per replica group, add the remaining instances from the pre-configured instance partitions.
       List<Integer> shuffledOffsets = new ArrayList<>(_numPreConfiguredInstancesPerReplicaGroup);
       for (int j = 0; j < _numPreConfiguredInstancesPerReplicaGroup; j++) {
         shuffledOffsets.add(j);
@@ -333,7 +346,10 @@ public class MirrorServerSetInstancePartitionSelector extends InstancePartitionS
         usedPreconfiguredInstanceOffsets.add(offset);
       }
     }
+  }
 
+  private void updateInstancePartitions(InstancePartitions instancePartitions,
+      Map<Integer, Map.Entry<Integer, Long>> existingOffsetToResultTuple) {
     List<List<String>> resultReplicaGroups = new ArrayList<>(_numTargetReplicaGroups);
     for (int i = 0; i < _numTargetReplicaGroups; i++) {
       resultReplicaGroups.add(new ArrayList<>(_numTargetInstancesPerReplicaGroup));
@@ -348,6 +364,9 @@ public class MirrorServerSetInstancePartitionSelector extends InstancePartitionS
       instancePartitions.setInstances(0, i, resultReplicaGroups.get(i));
     }
   }
+
+
+//Refactoring end
 
   private void createListAndLookupTablesFromExistingInstancePartitions() {
     List<List<String>> existingReplicaGroups = new ArrayList<>(_numExistingReplicaGroups);

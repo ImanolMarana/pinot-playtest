@@ -49,84 +49,98 @@ public class SortedIndexBasedFilterOperator extends BaseColumnFilterOperator {
 
   @Override
   protected BlockDocIdSet getNextBlockWithoutNullHandling() {
-    // At this point, we need to create a list of matching docIdRanges.
-    //
-    // There are two kinds of operators:
-    // - "Additive" operators (EQ, IN, RANGE): Build up a list of matching docIdRanges with adjacent ones merged.
-    // - "Subtractive" operators (NEQ, NOT IN): Build up a list of non-matching docIdRanges with adjacent ones merged,
-    //   then subtract them from the range of [0, numDocs) to get a list of matching docIdRanges.
-
     if (_predicateEvaluator instanceof SortedDictionaryBasedRangePredicateEvaluator) {
-      // For RANGE predicate, use start/end document id to construct a new document id range
-      SortedDictionaryBasedRangePredicateEvaluator rangePredicateEvaluator =
-          (SortedDictionaryBasedRangePredicateEvaluator) _predicateEvaluator;
-      int startDocId = _sortedIndexReader.getDocIds(rangePredicateEvaluator.getStartDictId()).getLeft();
-      // NOTE: End dictionary id is exclusive in OfflineDictionaryBasedRangePredicateEvaluator.
-      int endDocId = _sortedIndexReader.getDocIds(rangePredicateEvaluator.getEndDictId() - 1).getRight();
-      return new SortedDocIdSet(Collections.singletonList(new IntPair(startDocId, endDocId)));
+      return getBlockDocIdSetForRangePredicate();
     } else {
-      boolean exclusive = _predicateEvaluator.isExclusive();
-      int[] dictIds =
-          exclusive ? _predicateEvaluator.getNonMatchingDictIds() : _predicateEvaluator.getMatchingDictIds();
-      int numDictIds = dictIds.length;
-      // NOTE: PredicateEvaluator without matching/non-matching dictionary ids should not reach here.
-      Preconditions.checkState(numDictIds > 0);
-      if (numDictIds == 1) {
-        IntPair docIdRange = _sortedIndexReader.getDocIds(dictIds[0]);
-        if (exclusive) {
-          // NOTE: docIdRange has inclusive start and end.
-          List<IntPair> docIdRanges = new ArrayList<>(2);
-          int firstDocId = docIdRange.getLeft();
-          if (firstDocId > 0) {
-            docIdRanges.add(new IntPair(0, firstDocId - 1));
-          }
-          int lastDocId = docIdRange.getRight();
-          if (lastDocId < _numDocs - 1) {
-            docIdRanges.add(new IntPair(lastDocId + 1, _numDocs - 1));
-          }
-          return new SortedDocIdSet(docIdRanges);
-        } else {
-          return new SortedDocIdSet(Collections.singletonList(docIdRange));
-        }
+      return getBlockDocIdSetForOtherPredicates();
+    }
+  }
+
+  private BlockDocIdSet getBlockDocIdSetForRangePredicate() {
+    SortedDictionaryBasedRangePredicateEvaluator rangePredicateEvaluator =
+        (SortedDictionaryBasedRangePredicateEvaluator) _predicateEvaluator;
+    int startDocId = _sortedIndexReader.getDocIds(rangePredicateEvaluator.getStartDictId()).getLeft();
+    // NOTE: End dictionary id is exclusive in OfflineDictionaryBasedRangePredicateEvaluator.
+    int endDocId = _sortedIndexReader.getDocIds(rangePredicateEvaluator.getEndDictId() - 1).getRight();
+    return new SortedDocIdSet(Collections.singletonList(new IntPair(startDocId, endDocId)));
+  }
+
+  private BlockDocIdSet getBlockDocIdSetForOtherPredicates() {
+    boolean exclusive = _predicateEvaluator.isExclusive();
+    int[] dictIds =
+        exclusive ? _predicateEvaluator.getNonMatchingDictIds() : _predicateEvaluator.getMatchingDictIds();
+    int numDictIds = dictIds.length;
+    // NOTE: PredicateEvaluator without matching/non-matching dictionary ids should not reach here.
+    Preconditions.checkState(numDictIds > 0);
+    if (numDictIds == 1) {
+      return getBlockDocIdSetForSingleDictId(dictIds[0], exclusive);
+    } else {
+      return getBlockDocIdSetForMultipleDictIds(dictIds, exclusive);
+    }
+  }
+
+  private BlockDocIdSet getBlockDocIdSetForSingleDictId(int dictId, boolean exclusive) {
+    IntPair docIdRange = _sortedIndexReader.getDocIds(dictId);
+    if (exclusive) {
+      // NOTE: docIdRange has inclusive start and end.
+      List<IntPair> docIdRanges = new ArrayList<>(2);
+      int firstDocId = docIdRange.getLeft();
+      if (firstDocId > 0) {
+        docIdRanges.add(new IntPair(0, firstDocId - 1));
+      }
+      int lastDocId = docIdRange.getRight();
+      if (lastDocId < _numDocs - 1) {
+        docIdRanges.add(new IntPair(lastDocId + 1, _numDocs - 1));
+      }
+      return new SortedDocIdSet(docIdRanges);
+    } else {
+      return new SortedDocIdSet(Collections.singletonList(docIdRange));
+    }
+  }
+
+  private BlockDocIdSet getBlockDocIdSetForMultipleDictIds(int[] dictIds, boolean exclusive) {
+    // Merge adjacent docIdRanges (dictIds are already sorted)
+    List<IntPair> docIdRanges = new ArrayList<>();
+    IntPair lastDocIdRange = _sortedIndexReader.getDocIds(dictIds[0]);
+    for (int i = 1; i < dictIds.length; i++) {
+      IntPair docIdRange = _sortedIndexReader.getDocIds(dictIds[i]);
+      // NOTE: docIdRange has inclusive start and end.
+      if (docIdRange.getLeft() == lastDocIdRange.getRight() + 1) {
+        lastDocIdRange.setRight(docIdRange.getRight());
       } else {
-        // Merge adjacent docIdRanges (dictIds are already sorted)
-        List<IntPair> docIdRanges = new ArrayList<>();
-        IntPair lastDocIdRange = _sortedIndexReader.getDocIds(dictIds[0]);
-        for (int i = 1; i < numDictIds; i++) {
-          IntPair docIdRange = _sortedIndexReader.getDocIds(dictIds[i]);
-          // NOTE: docIdRange has inclusive start and end.
-          if (docIdRange.getLeft() == lastDocIdRange.getRight() + 1) {
-            lastDocIdRange.setRight(docIdRange.getRight());
-          } else {
-            docIdRanges.add(lastDocIdRange);
-            lastDocIdRange = docIdRange;
-          }
-        }
         docIdRanges.add(lastDocIdRange);
-
-        if (exclusive) {
-          // Invert the docIdRanges
-          int numDocIdRanges = docIdRanges.size();
-          List<IntPair> invertedDocIdRanges = new ArrayList<>(numDocIdRanges + 1);
-          // NOTE: docIdRange has inclusive start and end.
-          int firstDocId = docIdRanges.get(0).getLeft();
-          if (firstDocId > 0) {
-            invertedDocIdRanges.add(new IntPair(0, firstDocId - 1));
-          }
-          for (int i = 0; i < numDocIdRanges - 1; i++) {
-            invertedDocIdRanges
-                .add(new IntPair(docIdRanges.get(i).getRight() + 1, docIdRanges.get(i + 1).getLeft() - 1));
-          }
-          int lastDocId = docIdRanges.get(numDocIdRanges - 1).getRight();
-          if (lastDocId < _numDocs - 1) {
-            invertedDocIdRanges.add(new IntPair(lastDocId + 1, _numDocs - 1));
-          }
-          docIdRanges = invertedDocIdRanges;
-        }
-
-        return new SortedDocIdSet(docIdRanges);
+        lastDocIdRange = docIdRange;
       }
     }
+    docIdRanges.add(lastDocIdRange);
+
+    if (exclusive) {
+      docIdRanges = invertDocIdRanges(docIdRanges);
+    }
+
+    return new SortedDocIdSet(docIdRanges);
+  }
+
+  private List<IntPair> invertDocIdRanges(List<IntPair> docIdRanges) {
+    // Invert the docIdRanges
+    int numDocIdRanges = docIdRanges.size();
+    List<IntPair> invertedDocIdRanges = new ArrayList<>(numDocIdRanges + 1);
+    // NOTE: docIdRange has inclusive start and end.
+    int firstDocId = docIdRanges.get(0).getLeft();
+    if (firstDocId > 0) {
+      invertedDocIdRanges.add(new IntPair(0, firstDocId - 1));
+    }
+    for (int i = 0; i < numDocIdRanges - 1; i++) {
+      invertedDocIdRanges
+          .add(new IntPair(docIdRanges.get(i).getRight() + 1, docIdRanges.get(i + 1).getLeft() - 1));
+    }
+    int lastDocId = docIdRanges.get(numDocIdRanges - 1).getRight();
+    if (lastDocId < _numDocs - 1) {
+      invertedDocIdRanges.add(new IntPair(lastDocId + 1, _numDocs - 1));
+    }
+    return invertedDocIdRanges;
+  }
+//Refactoring end
   }
 
   @Override

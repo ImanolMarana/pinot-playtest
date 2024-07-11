@@ -375,59 +375,96 @@ public class SchemaConformingTransformerV2 implements RecordTransformer {
     String key = jsonPath.peekLast();
     ExtraFieldsContainer extraFieldsContainer = new ExtraFieldsContainer(storeUnindexableExtras);
 
-    // Base case
-    if (StreamDataDecoderImpl.isSpecialKeyType(key) || GenericRow.isSpecialKeyType(key)) {
-      outputRecord.putValue(key, value);
+    // Handle special keys and preserved fields
+    if (handleSpecialOrPreservedFields(key, jsonPath, value, outputRecord)) {
       return extraFieldsContainer;
     }
 
     String keyJsonPath = String.join(".", jsonPath);
+
+    // Handle fields to drop
+    if (shouldDropField(keyJsonPath)) {
+      return extraFieldsContainer;
+    }
+  
+    SchemaTreeNode currentNode = parentNode == null ? null : parentNode.getChild(key);
+    isIndexable = isIndexable && !isUnindexableField(key);
+
+    if (!(value instanceof Map)) {
+      return handleLeafNode(currentNode, keyJsonPath, value, isIndexable, outputRecord, mergedTextIndexMap,
+          extraFieldsContainer, storeIndexableExtras);
+    }
+
+    // Traverse the subtree
+    return traverseSubtree(currentNode, jsonPath, value, isIndexable, outputRecord, mergedTextIndexMap,
+        extraFieldsContainer);
+  }
+  
+  private boolean handleSpecialOrPreservedFields(String key, Deque<String> jsonPath, Object value,
+      GenericRow outputRecord) {
+    if (StreamDataDecoderImpl.isSpecialKeyType(key) || GenericRow.isSpecialKeyType(key)) {
+      outputRecord.putValue(key, value);
+      return true;
+    }
+  
+    String keyJsonPath = String.join(".", jsonPath);
     if (_transformerConfig.getFieldPathsToPreserveInput().contains(keyJsonPath)) {
       outputRecord.putValue(keyJsonPath, value);
-      return extraFieldsContainer;
+      return true;
     }
-
+  
+    return false;
+  }
+  
+  private boolean shouldDropField(String keyJsonPath) {
     Set<String> fieldPathsToDrop = _transformerConfig.getFieldPathsToDrop();
-    if (null != fieldPathsToDrop && fieldPathsToDrop.contains(keyJsonPath)) {
-      return extraFieldsContainer;
-    }
-
-    SchemaTreeNode currentNode = parentNode == null ? null : parentNode.getChild(key);
+    return null != fieldPathsToDrop && fieldPathsToDrop.contains(keyJsonPath);
+  }
+  
+  private boolean isUnindexableField(String key) {
     String unindexableFieldSuffix = _transformerConfig.getUnindexableFieldSuffix();
-    isIndexable = isIndexable && (null == unindexableFieldSuffix || !key.endsWith(unindexableFieldSuffix));
-    if (!(value instanceof Map)) {
-      // leaf node
-      if (!isIndexable) {
-        extraFieldsContainer.addUnindexableEntry(key, value);
+    return null != unindexableFieldSuffix && key.endsWith(unindexableFieldSuffix);
+  }
+  
+  private ExtraFieldsContainer handleLeafNode(SchemaTreeNode currentNode, String keyJsonPath, Object value,
+      boolean isIndexable, GenericRow outputRecord, Map<String, Object> mergedTextIndexMap,
+      ExtraFieldsContainer extraFieldsContainer, boolean storeIndexableExtras) {
+    if (!isIndexable) {
+      extraFieldsContainer.addUnindexableEntry(keyJsonPath.substring(keyJsonPath.lastIndexOf(".") + 1), value);
+    } else {
+      if (null != currentNode && currentNode.isColumn()) {
+        // In schema
+        outputRecord.putValue(currentNode.getColumnName(), currentNode.getValue(value));
+        if (_transformerConfig.getFieldsToDoubleIngest().contains(keyJsonPath)) {
+          extraFieldsContainer.addIndexableEntry(keyJsonPath.substring(keyJsonPath.lastIndexOf(".") + 1), value);
+        }
+        mergedTextIndexMap.put(keyJsonPath, value);
       } else {
-        if (null != currentNode && currentNode.isColumn()) {
-          // In schema
-          outputRecord.putValue(currentNode.getColumnName(), currentNode.getValue(value));
-          if (_transformerConfig.getFieldsToDoubleIngest().contains(keyJsonPath)) {
-            extraFieldsContainer.addIndexableEntry(key, value);
-          }
+        // Out of schema
+        if (storeIndexableExtras) {
+          extraFieldsContainer.addIndexableEntry(keyJsonPath.substring(keyJsonPath.lastIndexOf(".") + 1), value);
           mergedTextIndexMap.put(keyJsonPath, value);
-        } else {
-          // Out of schema
-          if (storeIndexableExtras) {
-            extraFieldsContainer.addIndexableEntry(key, value);
-            mergedTextIndexMap.put(keyJsonPath, value);
-          }
         }
       }
-      return extraFieldsContainer;
     }
-    // Traverse the subtree
+    return extraFieldsContainer;
+  }
+  
+  private ExtraFieldsContainer traverseSubtree(SchemaTreeNode currentNode, Deque<String> jsonPath, Object value,
+      boolean isIndexable, GenericRow outputRecord, Map<String, Object> mergedTextIndexMap,
+      ExtraFieldsContainer extraFieldsContainer) {
     Map<String, Object> valueAsMap = (Map<String, Object>) value;
     for (Map.Entry<String, Object> entry : valueAsMap.entrySet()) {
       jsonPath.addLast(entry.getKey());
-      ExtraFieldsContainer childContainer =
-          processField(currentNode, jsonPath, entry.getValue(), isIndexable, outputRecord, mergedTextIndexMap);
-      extraFieldsContainer.addChild(key, childContainer);
+      ExtraFieldsContainer childContainer = processField(currentNode, jsonPath, entry.getValue(), isIndexable,
+          outputRecord, mergedTextIndexMap);
+      extraFieldsContainer.addChild(entry.getKey(), childContainer);
       jsonPath.removeLast();
     }
     return extraFieldsContainer;
   }
+
+//Refactoring end
 
   /**
    * Generate an Lucene document based on the provided key-value pair.

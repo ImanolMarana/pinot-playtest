@@ -206,34 +206,32 @@ public class NumericalFilterOptimizer extends BaseAndOrBooleanFilterOptimizer {
    * to ensure that RHS literal is the same datatype as LHS column.
    */
   private static Expression rewriteRangeExpression(Expression range, FilterKind kind, DataType dataType,
-      Expression rhs) {
-    switch (rhs.getLiteral().getSetField()) {
-      case INT_VALUE:
-        // No rewrites needed since INT conversion to numeric column types can be handled on the server side.
-        break;
-      case LONG_VALUE: {
+          Expression rhs) {
+        switch (rhs.getLiteral().getSetField()) {
+          case INT_VALUE:
+            // No rewrites needed since INT conversion to numeric column types can be handled on the server side.
+            break;
+          case LONG_VALUE:
+            return rewriteRangeExpressionForLongLiteral(range, kind, dataType, rhs);
+          case FLOAT_VALUE: {
+            float actual = Float.intBitsToFloat(rhs.getLiteral().getFloatValue());
+            System.out.println(actual);
+            break;
+          }
+          case DOUBLE_VALUE:
+            return rewriteRangeExpressionForDoubleLiteral(range, kind, dataType, rhs);
+          default:
+            break;
+        }
+        return range;
+      }
+
+      private static Expression rewriteRangeExpressionForLongLiteral(Expression range, FilterKind kind,
+          DataType dataType, Expression rhs) {
         long actual = rhs.getLiteral().getLongValue();
         switch (dataType) {
           case INT: {
-            int converted = (int) actual;
-            int comparison = Long.compare(actual, converted);
-            if (comparison > 0) {
-              // Literal value is greater than the bounds of INT. > and >= expressions will always be false because an
-              // INT column can never have a value greater than Integer.MAX_VALUE. < and <= expressions will always be
-              // true, because an INT column will always have values greater than or equal to Integer.MIN_VALUE and less
-              // than or equal to Integer.MAX_VALUE.
-              return getExpressionFromBoolean(kind == FilterKind.LESS_THAN || kind == FilterKind.LESS_THAN_OR_EQUAL);
-            } else if (comparison < 0) {
-              // Literal value is less than the bounds of INT. > and >= expressions will always be true because an
-              // INT column will always have a value greater than or equal to Integer.MIN_VALUE. < and <= expressions
-              // will always be false, because an INT column will never have values less than Integer.MIN_VALUE.
-              return getExpressionFromBoolean(
-                  kind == FilterKind.GREATER_THAN || kind == FilterKind.GREATER_THAN_OR_EQUAL);
-            } else {
-              // Long literal value falls within the bounds of INT column, server will successfully convert the literal
-              // value when needed.
-            }
-            break;
+            return rewriteRangeExpressionForIntColumnAndLongLiteral(range, kind, actual);
           }
           case FLOAT: {
             // Since we are converting a long value to float, float value will never be out of bounds (i.e -Infinity
@@ -269,14 +267,34 @@ public class NumericalFilterOptimizer extends BaseAndOrBooleanFilterOptimizer {
           default:
             break;
         }
-        break;
+        return range;
       }
-      case FLOAT_VALUE: {
-        float actual = Float.intBitsToFloat(rhs.getLiteral().getFloatValue());
-        System.out.println(actual);
-        break;
+
+      private static Expression rewriteRangeExpressionForIntColumnAndLongLiteral(Expression range, FilterKind kind,
+          long actual) {
+        int converted = (int) actual;
+        int comparison = Long.compare(actual, converted);
+        if (comparison > 0) {
+          // Literal value is greater than the bounds of INT. > and >= expressions will always be false because an
+          // INT column can never have a value greater than Integer.MAX_VALUE. < and <= expressions will always be
+          // true, because an INT column will always have values greater than or equal to Integer.MIN_VALUE and less
+          // than or equal to Integer.MAX_VALUE.
+          return getExpressionFromBoolean(kind == FilterKind.LESS_THAN || kind == FilterKind.LESS_THAN_OR_EQUAL);
+        } else if (comparison < 0) {
+          // Literal value is less than the bounds of INT. > and >= expressions will always be true because an
+          // INT column will always have a value greater than or equal to Integer.MIN_VALUE. < and <= expressions
+          // will always be false, because an INT column will never have values less than Integer.MIN_VALUE.
+          return getExpressionFromBoolean(
+              kind == FilterKind.GREATER_THAN || kind == FilterKind.GREATER_THAN_OR_EQUAL);
+        } else {
+          // Long literal value falls within the bounds of INT column, server will successfully convert the literal
+          // value when needed.
+        }
+        return range;
       }
-      case DOUBLE_VALUE: {
+
+      private static Expression rewriteRangeExpressionForDoubleLiteral(Expression range, FilterKind kind,
+          DataType dataType, Expression rhs) {
         double actual = rhs.getLiteral().getDoubleValue();
         switch (dataType) {
           case INT: {
@@ -338,13 +356,9 @@ public class NumericalFilterOptimizer extends BaseAndOrBooleanFilterOptimizer {
           default:
             break;
         }
-        break;
+        return range;
       }
-      default:
-        break;
-    }
-    return range;
-  }
+//Refactoring end
 
   /**
    * Helper function to rewrite range operator of a range expression.

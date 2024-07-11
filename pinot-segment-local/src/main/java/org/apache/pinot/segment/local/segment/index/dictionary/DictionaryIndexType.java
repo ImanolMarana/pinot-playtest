@@ -418,6 +418,23 @@ public class DictionaryIndexType
         ? Lists.newArrayList()
         : tableConfig.getFieldConfigList();
 
+    handleFieldConfigs(noDictionaryColumns, fieldConfigList);
+
+    // create the missing field config for the remaining noDictionaryColumns
+    for (String column : noDictionaryColumns) {
+      FieldConfig.Builder builder = new FieldConfig.Builder(column);
+      builder.withEncodingType(FieldConfig.EncodingType.RAW);
+      fieldConfigList.add(builder.build());
+    }
+
+    // old configs cleanup
+    indexingConfig.setNoDictionaryConfig(null);
+    indexingConfig.setNoDictionaryColumns(null);
+    indexingConfig.setOnHeapDictionaryColumns(null);
+    indexingConfig.setVarLengthDictionaryColumns(null);
+  }
+
+  private void handleFieldConfigs(List<String> noDictionaryColumns, List<FieldConfig> fieldConfigList) {
     List<FieldConfig> configsToUpdate = new ArrayList<>();
     for (FieldConfig fieldConfig : fieldConfigList) {
       // skip further computation of field configs which already has RAW encodingType
@@ -451,20 +468,9 @@ public class DictionaryIndexType
       fieldConfigList.remove(fieldConfig);
       fieldConfigList.add(builder.build());
     }
-
-    // create the missing field config for the remaining noDictionaryColumns
-    for (String column : noDictionaryColumns) {
-      FieldConfig.Builder builder = new FieldConfig.Builder(column);
-      builder.withEncodingType(FieldConfig.EncodingType.RAW);
-      fieldConfigList.add(builder.build());
-    }
-
-    // old configs cleanup
-    indexingConfig.setNoDictionaryConfig(null);
-    indexingConfig.setNoDictionaryColumns(null);
-    indexingConfig.setOnHeapDictionaryColumns(null);
-    indexingConfig.setVarLengthDictionaryColumns(null);
   }
+
+//Refactoring end
 
   /**
    * Creates a MutableDictionary.

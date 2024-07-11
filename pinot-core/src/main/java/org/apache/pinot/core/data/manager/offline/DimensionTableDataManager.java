@@ -234,11 +234,28 @@ public class DimensionTableDataManager extends OfflineTableDataManager {
     List<String> primaryKeyColumns = schema.getPrimaryKeyColumns();
     Preconditions.checkState(CollectionUtils.isNotEmpty(primaryKeyColumns),
         "Primary key columns must be configured for dimension table: %s", _tableNameWithType);
-    int numPrimaryKeyColumns = primaryKeyColumns.size();
 
     Map<PrimaryKey, LookupRecordLocation> lookupTable = new HashMap<>();
     List<SegmentDataManager> segmentDataManagers = acquireAllSegments();
     List<PinotSegmentRecordReader> recordReaders = new ArrayList<>(segmentDataManagers.size());
+
+    try {
+      populateLookupTable(token, schema, primaryKeyColumns, lookupTable, segmentDataManagers, recordReaders);
+    } catch (Exception e) {
+      closeRecordReaders(recordReaders);
+      releaseSegmentDataManagers(segmentDataManagers);
+      throw new RuntimeException(
+          "Caught exception while reading records from segments: " + e.getMessage());
+    }
+
+    return new MemoryOptimizedDimensionTable(schema, primaryKeyColumns, lookupTable, segmentDataManagers,
+        recordReaders, this);
+  }
+
+  private void populateLookupTable(int token, Schema schema, List<String> primaryKeyColumns,
+      Map<PrimaryKey, LookupRecordLocation> lookupTable, List<SegmentDataManager> segmentDataManagers,
+      List<PinotSegmentRecordReader> recordReaders) {
+    int numPrimaryKeyColumns = primaryKeyColumns.size();
     for (SegmentDataManager segmentManager : segmentDataManagers) {
       IndexSegment indexSegment = segmentManager.getSegment();
       int numTotalDocs = indexSegment.getSegmentMetadata().getTotalDocs();
@@ -250,18 +267,7 @@ public class DimensionTableDataManager extends OfflineTableDataManager {
           for (int i = 0; i < numTotalDocs; i++) {
             if (_loadToken.get() != token) {
               // Token changed during the loading, abort the loading
-              for (PinotSegmentRecordReader reader : recordReaders) {
-                try {
-                  reader.close();
-                } catch (Exception e) {
-                  _logger.error("Caught exception while closing record reader for segment: {}", reader.getSegmentName(),
-                      e);
-                }
-              }
-              for (SegmentDataManager dataManager : segmentDataManagers) {
-                releaseSegment(dataManager);
-              }
-              return null;
+              throw new IllegalStateException("Loading token changed, aborting lookup table population.");
             }
             Object[] values = new Object[numPrimaryKeyColumns];
             for (int j = 0; j < numPrimaryKeyColumns; j++) {
@@ -271,13 +277,30 @@ public class DimensionTableDataManager extends OfflineTableDataManager {
           }
         } catch (Exception e) {
           throw new RuntimeException(
-              "Caught exception while reading records from segment: " + indexSegment.getSegmentName());
+              "Caught exception while reading records from segment: " + indexSegment.getSegmentName(), e);
         }
       }
     }
-    return new MemoryOptimizedDimensionTable(schema, primaryKeyColumns, lookupTable, segmentDataManagers, recordReaders,
-        this);
   }
+
+  private void closeRecordReaders(List<PinotSegmentRecordReader> recordReaders) {
+    for (PinotSegmentRecordReader reader : recordReaders) {
+      try {
+        reader.close();
+      } catch (Exception e) {
+        _logger.error("Caught exception while closing record reader for segment: {}", reader.getSegmentName(),
+            e);
+      }
+    }
+  }
+
+  private void releaseSegmentDataManagers(List<SegmentDataManager> segmentDataManagers) {
+    for (SegmentDataManager dataManager : segmentDataManagers) {
+      releaseSegment(dataManager);
+    }
+  }
+
+//Refactoring end
 
   public boolean isPopulated() {
     return !_dimensionTable.get().isEmpty();

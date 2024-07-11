@@ -328,35 +328,41 @@ public class StatMap<K extends Enum<K> & StatMap.Key> {
 
   private boolean checkContainsNoDefault() {
     for (Map.Entry<K, Object> entry : _map.entrySet()) {
-      K key = entry.getKey();
-      Object value = entry.getValue();
-      switch (key.getType()) {
-        case BOOLEAN:
-          if (value == null || !(boolean) value) {
-            throw new IllegalStateException("Boolean value must be true but " + value + " is stored for key " + key);
-          }
-          break;
-        case INT:
-          if (value == null || (int) value == 0) {
-            throw new IllegalStateException("Int value must be non-zero but " + value + " is stored for key " + key);
-          }
-          break;
-        case LONG:
-          if (value == null || (long) value == 0) {
-            throw new IllegalStateException("Long value must be non-zero but " + value + " is stored for key " + key);
-          }
-          break;
-        case STRING:
-          if (value == null) {
-            throw new IllegalStateException("String value must be non-null but null is stored for key " + key);
-          }
-          break;
-        default:
-          throw new IllegalArgumentException("Unsupported type: " + key.getType());
-      }
+      checkNoDefaultForKey(entry);
     }
     return true;
   }
+  
+  private void checkNoDefaultForKey(Map.Entry<K, Object> entry) {
+    K key = entry.getKey();
+    Object value = entry.getValue();
+    switch (key.getType()) {
+      case BOOLEAN:
+        if (value == null || !(boolean) value) {
+          throw new IllegalStateException("Boolean value must be true but " + value + " is stored for key " + key);
+        }
+        break;
+      case INT:
+        if (value == null || (int) value == 0) {
+          throw new IllegalStateException("Int value must be non-zero but " + value + " is stored for key " + key);
+        }
+        break;
+      case LONG:
+        if (value == null || (long) value == 0) {
+          throw new IllegalStateException("Long value must be non-zero but " + value + " is stored for key " + key);
+        }
+        break;
+      case STRING:
+        if (value == null) {
+          throw new IllegalStateException("String value must be non-null but null is stored for key " + key);
+        }
+        break;
+      default:
+        throw new IllegalArgumentException("Unsupported type: " + key.getType());
+    }
+  }
+
+//Refactoring end
 
   public static String getDefaultStatName(Key key) {
     String name = key.name();

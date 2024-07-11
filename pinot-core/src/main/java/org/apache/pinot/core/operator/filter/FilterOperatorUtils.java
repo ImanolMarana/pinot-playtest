@@ -203,51 +203,59 @@ public class FilterOperatorUtils {
      * removed from the list before calling this method.
      */
     protected void reorderAndFilterChildOperators(QueryContext queryContext, List<BaseFilterOperator> filterOperators) {
-      filterOperators.sort(new Comparator<BaseFilterOperator>() {
-        @Override
-        public int compare(BaseFilterOperator o1, BaseFilterOperator o2) {
-          return getPriority(o1) - getPriority(o2);
-        }
+    filterOperators.sort((o1, o2) -> getFilterPriority(queryContext, o1) - getFilterPriority(queryContext, o2));
+  }
 
-        int getPriority(BaseFilterOperator filterOperator) {
-          if (filterOperator instanceof PrioritizedFilterOperator) {
-            OptionalInt priority = ((PrioritizedFilterOperator<?>) filterOperator).getPriority();
-            if (priority.isPresent()) {
-              return priority.getAsInt();
-            }
-          }
-          if (filterOperator instanceof SortedIndexBasedFilterOperator) {
-            return PrioritizedFilterOperator.HIGH_PRIORITY;
-          }
-          if (filterOperator instanceof BitmapBasedFilterOperator) {
-            return PrioritizedFilterOperator.MEDIUM_PRIORITY;
-          }
-          if (filterOperator instanceof RangeIndexBasedFilterOperator
-              || filterOperator instanceof TextContainsFilterOperator
-              || filterOperator instanceof TextMatchFilterOperator || filterOperator instanceof JsonMatchFilterOperator
-              || filterOperator instanceof H3IndexFilterOperator
-              || filterOperator instanceof H3InclusionIndexFilterOperator) {
-            return PrioritizedFilterOperator.LOW_PRIORITY;
-          }
-          if (filterOperator instanceof AndFilterOperator) {
-            return PrioritizedFilterOperator.AND_PRIORITY;
-          }
-          if (filterOperator instanceof OrFilterOperator) {
-            return PrioritizedFilterOperator.OR_PRIORITY;
-          }
-          if (filterOperator instanceof NotFilterOperator) {
-            return getPriority(((NotFilterOperator) filterOperator).getChildFilterOperator());
-          }
-          if (filterOperator instanceof ScanBasedFilterOperator) {
-            int basePriority = PrioritizedFilterOperator.SCAN_PRIORITY;
-            return getScanBasedFilterPriority(queryContext, (ScanBasedFilterOperator) filterOperator, basePriority);
-          }
-          if (filterOperator instanceof ExpressionFilterOperator) {
-            return PrioritizedFilterOperator.EXPRESSION_PRIORITY;
-          }
-          return PrioritizedFilterOperator.UNKNOWN_FILTER_PRIORITY;
-        }
-      });
+  private int getFilterPriority(QueryContext queryContext, BaseFilterOperator filterOperator) {
+    if (filterOperator instanceof PrioritizedFilterOperator) {
+      OptionalInt priority = ((PrioritizedFilterOperator<?>) filterOperator).getPriority();
+      if (priority.isPresent()) {
+        return priority.getAsInt();
+      }
+    }
+
+    if (filterOperator instanceof SortedIndexBasedFilterOperator) {
+      return PrioritizedFilterOperator.HIGH_PRIORITY;
+    }
+    if (filterOperator instanceof BitmapBasedFilterOperator) {
+      return PrioritizedFilterOperator.MEDIUM_PRIORITY;
+    }
+    if (filterOperator instanceof RangeIndexBasedFilterOperator
+        || filterOperator instanceof TextContainsFilterOperator
+        || filterOperator instanceof TextMatchFilterOperator
+        || filterOperator instanceof JsonMatchFilterOperator
+        || filterOperator instanceof H3IndexFilterOperator
+        || filterOperator instanceof H3InclusionIndexFilterOperator) {
+      return PrioritizedFilterOperator.LOW_PRIORITY;
+    }
+    if (filterOperator instanceof AndFilterOperator) {
+      return PrioritizedFilterOperator.AND_PRIORITY;
+    }
+    if (filterOperator instanceof OrFilterOperator) {
+      return PrioritizedFilterOperator.OR_PRIORITY;
+    }
+    if (filterOperator instanceof NotFilterOperator) {
+      return getFilterPriority(queryContext, ((NotFilterOperator) filterOperator).getChildFilterOperator());
+    }
+    if (filterOperator instanceof ScanBasedFilterOperator) {
+      int basePriority = PrioritizedFilterOperator.SCAN_PRIORITY;
+      return getScanBasedFilterPriority(queryContext, (ScanBasedFilterOperator) filterOperator, basePriority);
+    }
+    if (filterOperator instanceof ExpressionFilterOperator) {
+      return PrioritizedFilterOperator.EXPRESSION_PRIORITY;
+    }
+    return PrioritizedFilterOperator.UNKNOWN_FILTER_PRIORITY;
+  }
+
+  private int getScanBasedFilterPriority(QueryContext queryContext,
+      ScanBasedFilterOperator scanBasedFilterOperator, int basePriority) {
+    if (queryContext.isSkipScanFilterReorder()) {
+      return basePriority;
+    }
+
+    return scanBasedFilterOperator.getDataSourceMetadata().isSingleValue() ? basePriority : basePriority + 50;
+  }
+//Refactoring end
     }
 
     public static int getScanBasedFilterPriority(QueryContext queryContext,

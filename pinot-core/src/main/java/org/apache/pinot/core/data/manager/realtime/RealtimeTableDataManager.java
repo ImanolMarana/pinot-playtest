@@ -137,32 +137,45 @@ public class RealtimeTableDataManager extends BaseTableDataManager {
   @Override
   protected void doInit() {
     _leaseExtender = SegmentBuildTimeLeaseExtender.getOrCreate(_instanceId, _serverMetrics, _tableNameWithType);
-    // Tracks ingestion delay of all partitions being served for this table
     _ingestionDelayTracker =
         new IngestionDelayTracker(_serverMetrics, _tableNameWithType, this, _isServerReadyToServeQueries);
+    initStatsHistory();
+    cleanUpConsumerDir();
+    setupDedupMetadataManager();
+    setupUpsertMetadataManager();
+    _isTableReadyToConsumeData = createIsTableReadyToConsumeData();
+  }
+
+  private void initStatsHistory() {
     File statsFile = new File(_tableDataDir, STATS_FILE_NAME);
     try {
       _statsHistory = RealtimeSegmentStatsHistory.deserialzeFrom(statsFile);
     } catch (IOException | ClassNotFoundException e) {
-      _logger.error("Caught exception while reading stats history from: {}", statsFile.getAbsolutePath(), e);
-      File savedFile = new File(_tableDataDir, STATS_FILE_NAME + "." + UUID.randomUUID());
-      try {
-        FileUtils.moveFile(statsFile, savedFile);
-      } catch (IOException e1) {
-        _logger.error("Could not move {} to {}", statsFile.getAbsolutePath(), savedFile.getAbsolutePath(), e1);
-        throw new RuntimeException(e);
-      }
-      _logger.warn("Saved unreadable {} into {}. Creating a fresh instance", statsFile.getAbsolutePath(),
-          savedFile.getAbsolutePath());
-      try {
-        _statsHistory = RealtimeSegmentStatsHistory.deserialzeFrom(statsFile);
-      } catch (Exception e2) {
-        Utils.rethrowException(e2);
-      }
+      handleStatsHistoryDeserializationError(statsFile, e);
     }
     _statsHistory.setMinIntervalBetweenUpdatesMillis(
         TimeUnit.MILLISECONDS.convert(MIN_INTERVAL_BETWEEN_STATS_UPDATES_MINUTES, TimeUnit.MINUTES));
+  }
 
+  private void handleStatsHistoryDeserializationError(File statsFile, Exception e) {
+    _logger.error("Caught exception while reading stats history from: {}", statsFile.getAbsolutePath(), e);
+    File savedFile = new File(_tableDataDir, STATS_FILE_NAME + "." + UUID.randomUUID());
+    try {
+      FileUtils.moveFile(statsFile, savedFile);
+    } catch (IOException e1) {
+      _logger.error("Could not move {} to {}", statsFile.getAbsolutePath(), savedFile.getAbsolutePath(), e1);
+      throw new RuntimeException(e);
+    }
+    _logger.warn("Saved unreadable {} into {}. Creating a fresh instance", statsFile.getAbsolutePath(),
+        savedFile.getAbsolutePath());
+    try {
+      _statsHistory = RealtimeSegmentStatsHistory.deserialzeFrom(statsFile);
+    } catch (Exception e2) {
+      Utils.rethrowException(e2);
+    }
+  }
+
+  private void cleanUpConsumerDir() {
     String consumerDirPath = getConsumerDir();
     File consumerDir = new File(consumerDirPath);
     if (consumerDir.exists()) {
@@ -177,10 +190,9 @@ public class RealtimeTableDataManager extends BaseTableDataManager {
         }
       }
     }
+  }
 
-    // Set up dedup/upsert metadata manager
-    // NOTE: Dedup/upsert has to be set up when starting the server. Changing the table config without restarting the
-    //       server won't enable/disable them on the fly.
+  private void setupDedupMetadataManager() {
     DedupConfig dedupConfig = _tableConfig.getDedupConfig();
     boolean dedupEnabled = dedupConfig != null && dedupConfig.isDedupEnabled();
     if (dedupEnabled) {
@@ -192,10 +204,12 @@ public class RealtimeTableDataManager extends BaseTableDataManager {
           "Primary key columns must be configured for dedup");
       _tableDedupMetadataManager = TableDedupMetadataManagerFactory.create(_tableConfig, schema, this, _serverMetrics);
     }
+  }
 
+  private void setupUpsertMetadataManager() {
     UpsertConfig upsertConfig = _tableConfig.getUpsertConfig();
     if (upsertConfig != null && upsertConfig.getMode() != UpsertConfig.Mode.NONE) {
-      Preconditions.checkState(!dedupEnabled, "Dedup and upsert cannot be both enabled for table: %s",
+      Preconditions.checkState(!isDedupEnabled(), "Dedup and upsert cannot be both enabled for table: %s",
           _tableUpsertMetadataManager);
       Schema schema = ZKMetadataProvider.getTableSchema(_propertyStore, _tableNameWithType);
       Preconditions.checkState(schema != null, "Failed to find schema for table: %s", _tableNameWithType);
@@ -203,10 +217,11 @@ public class RealtimeTableDataManager extends BaseTableDataManager {
           TableUpsertMetadataManagerFactory.create(_tableConfig, _instanceDataManagerConfig.getUpsertConfig());
       _tableUpsertMetadataManager.init(_tableConfig, schema, this);
     }
+  }
 
-    // For dedup and partial-upsert, need to wait for all segments loaded before starting consuming data
+  private BooleanSupplier createIsTableReadyToConsumeData() {
     if (isDedupEnabled() || isPartialUpsertEnabled()) {
-      _isTableReadyToConsumeData = new BooleanSupplier() {
+      return new BooleanSupplier() {
         volatile boolean _allSegmentsLoaded;
         long _lastCheckTimeMs;
 
@@ -231,9 +246,11 @@ public class RealtimeTableDataManager extends BaseTableDataManager {
         }
       };
     } else {
-      _isTableReadyToConsumeData = () -> true;
+      return () -> true;
     }
   }
+
+//Refactoring end
 
   @Override
   protected void doStart() {

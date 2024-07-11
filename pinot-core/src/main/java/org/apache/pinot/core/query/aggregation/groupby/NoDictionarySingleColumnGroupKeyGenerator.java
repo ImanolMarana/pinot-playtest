@@ -269,108 +269,151 @@ public class NoDictionarySingleColumnGroupKeyGenerator implements GroupKeyGenera
     BlockValSet blockValSet = valueBlock.getBlockValueSet(_groupByExpression);
 
     if (_isSingleValueExpression) {
-      switch (_storedType) {
-        case INT:
-          int[] intValues = blockValSet.getIntValuesSV();
-          for (int i = 0; i < numDocs; i++) {
-            groupKeys[i] = new int[]{getKeyForValue(intValues[i])};
-          }
-          break;
-        case LONG:
-          long[] longValues = blockValSet.getLongValuesSV();
-          for (int i = 0; i < numDocs; i++) {
-            groupKeys[i] = new int[]{getKeyForValue(longValues[i])};
-          }
-          break;
-        case FLOAT:
-          float[] floatValues = blockValSet.getFloatValuesSV();
-          for (int i = 0; i < numDocs; i++) {
-            groupKeys[i] = new int[]{getKeyForValue(floatValues[i])};
-          }
-          break;
-        case DOUBLE:
-          double[] doubleValues = blockValSet.getDoubleValuesSV();
-          for (int i = 0; i < numDocs; i++) {
-            groupKeys[i] = new int[]{getKeyForValue(doubleValues[i])};
-          }
-          break;
-        case STRING:
-          String[] stringValues = blockValSet.getStringValuesSV();
-          for (int i = 0; i < numDocs; i++) {
-            groupKeys[i] = new int[]{getKeyForValue(stringValues[i])};
-          }
-          break;
-        case BYTES:
-          byte[][] byteValues = blockValSet.getBytesValuesSV();
-          for (int i = 0; i < numDocs; i++) {
-            groupKeys[i] = new int[]{getKeyForValue(new ByteArray(byteValues[i]))};
-          }
-          break;
-        default:
-          throw new IllegalArgumentException("Illegal data type for no-dictionary key generator: " + _storedType);
-      }
+      generateKeysForSingleValueBlock(blockValSet, groupKeys, numDocs);
     } else {
-      switch (_storedType) {
-        case INT:
-          int[][] intValues = blockValSet.getIntValuesMV();
-          for (int i = 0; i < numDocs; i++) {
-            int mvSize = intValues[i].length;
-            int[] mvKeys = new int[mvSize];
-            for (int j = 0; j < mvSize; j++) {
-              mvKeys[j] = getKeyForValue(intValues[i][j]);
-            }
-            groupKeys[i] = mvKeys;
-          }
-          break;
-        case LONG:
-          long[][] longValues = blockValSet.getLongValuesMV();
-          for (int i = 0; i < numDocs; i++) {
-            int mvSize = longValues[i].length;
-            int[] mvKeys = new int[mvSize];
-            for (int j = 0; j < mvSize; j++) {
-              mvKeys[j] = getKeyForValue(longValues[i][j]);
-            }
-            groupKeys[i] = mvKeys;
-          }
-          break;
-        case FLOAT:
-          float[][] floatValues = blockValSet.getFloatValuesMV();
-          for (int i = 0; i < numDocs; i++) {
-            int mvSize = floatValues[i].length;
-            int[] mvKeys = new int[mvSize];
-            for (int j = 0; j < mvSize; j++) {
-              mvKeys[j] = getKeyForValue(floatValues[i][j]);
-            }
-            groupKeys[i] = mvKeys;
-          }
-          break;
-        case DOUBLE:
-          double[][] doubleValues = blockValSet.getDoubleValuesMV();
-          for (int i = 0; i < numDocs; i++) {
-            int mvSize = doubleValues[i].length;
-            int[] mvKeys = new int[mvSize];
-            for (int j = 0; j < mvSize; j++) {
-              mvKeys[j] = getKeyForValue(doubleValues[i][j]);
-            }
-            groupKeys[i] = mvKeys;
-          }
-          break;
-        case STRING:
-          String[][] stringValues = blockValSet.getStringValuesMV();
-          for (int i = 0; i < numDocs; i++) {
-            int mvSize = stringValues[i].length;
-            int[] mvKeys = new int[mvSize];
-            for (int j = 0; j < mvSize; j++) {
-              mvKeys[j] = getKeyForValue(stringValues[i][j]);
-            }
-            groupKeys[i] = mvKeys;
-          }
-          break;
-        default:
-          throw new IllegalArgumentException("Illegal data type for no-dictionary key generator: " + _storedType);
-      }
+      generateKeysForMultiValueBlock(blockValSet, groupKeys, numDocs);
     }
   }
+
+  private void generateKeysForSingleValueBlock(BlockValSet blockValSet, int[][] groupKeys, int numDocs) {
+    switch (_storedType) {
+      case INT:
+        generateKeysForIntValues(blockValSet.getIntValuesSV(), groupKeys, numDocs);
+        break;
+      case LONG:
+        generateKeysForLongValues(blockValSet.getLongValuesSV(), groupKeys, numDocs);
+        break;
+      case FLOAT:
+        generateKeysForFloatValues(blockValSet.getFloatValuesSV(), groupKeys, numDocs);
+        break;
+      case DOUBLE:
+        generateKeysForDoubleValues(blockValSet.getDoubleValuesSV(), groupKeys, numDocs);
+        break;
+      case STRING:
+        generateKeysForStringValues(blockValSet.getStringValuesSV(), groupKeys, numDocs);
+        break;
+      case BYTES:
+        generateKeysForBytesValues(blockValSet.getBytesValuesSV(), groupKeys, numDocs);
+        break;
+      default:
+        throw new IllegalArgumentException("Illegal data type for no-dictionary key generator: " + _storedType);
+    }
+  }
+
+  private void generateKeysForMultiValueBlock(BlockValSet blockValSet, int[][] groupKeys, int numDocs) {
+    switch (_storedType) {
+      case INT:
+        generateKeysForIntValuesMV(blockValSet.getIntValuesMV(), groupKeys, numDocs);
+        break;
+      case LONG:
+        generateKeysForLongValuesMV(blockValSet.getLongValuesMV(), groupKeys, numDocs);
+        break;
+      case FLOAT:
+        generateKeysForFloatValuesMV(blockValSet.getFloatValuesMV(), groupKeys, numDocs);
+        break;
+      case DOUBLE:
+        generateKeysForDoubleValuesMV(blockValSet.getDoubleValuesMV(), groupKeys, numDocs);
+        break;
+      case STRING:
+        generateKeysForStringValuesMV(blockValSet.getStringValuesMV(), groupKeys, numDocs);
+        break;
+      default:
+        throw new IllegalArgumentException("Illegal data type for no-dictionary key generator: " + _storedType);
+    }
+  }
+  
+  private void generateKeysForIntValues(int[] intValues, int[][] groupKeys, int numDocs) {
+    for (int i = 0; i < numDocs; i++) {
+      groupKeys[i] = new int[]{getKeyForValue(intValues[i])};
+    }
+  }
+
+  private void generateKeysForLongValues(long[] longValues, int[][] groupKeys, int numDocs) {
+    for (int i = 0; i < numDocs; i++) {
+      groupKeys[i] = new int[]{getKeyForValue(longValues[i])};
+    }
+  }
+
+  private void generateKeysForFloatValues(float[] floatValues, int[][] groupKeys, int numDocs) {
+    for (int i = 0; i < numDocs; i++) {
+      groupKeys[i] = new int[]{getKeyForValue(floatValues[i])};
+    }
+  }
+
+  private void generateKeysForDoubleValues(double[] doubleValues, int[][] groupKeys, int numDocs) {
+    for (int i = 0; i < numDocs; i++) {
+      groupKeys[i] = new int[]{getKeyForValue(doubleValues[i])};
+    }
+  }
+
+  private void generateKeysForStringValues(String[] stringValues, int[][] groupKeys, int numDocs) {
+    for (int i = 0; i < numDocs; i++) {
+      groupKeys[i] = new int[]{getKeyForValue(stringValues[i])};
+    }
+  }
+
+  private void generateKeysForBytesValues(byte[][] byteValues, int[][] groupKeys, int numDocs) {
+    for (int i = 0; i < numDocs; i++) {
+      groupKeys[i] = new int[]{getKeyForValue(new ByteArray(byteValues[i]))};
+    }
+  }
+
+  private void generateKeysForIntValuesMV(int[][] intValues, int[][] groupKeys, int numDocs) {
+    for (int i = 0; i < numDocs; i++) {
+      int mvSize = intValues[i].length;
+      int[] mvKeys = new int[mvSize];
+      for (int j = 0; j < mvSize; j++) {
+        mvKeys[j] = getKeyForValue(intValues[i][j]);
+      }
+      groupKeys[i] = mvKeys;
+    }
+  }
+
+  private void generateKeysForLongValuesMV(long[][] longValues, int[][] groupKeys, int numDocs) {
+    for (int i = 0; i < numDocs; i++) {
+      int mvSize = longValues[i].length;
+      int[] mvKeys = new int[mvSize];
+      for (int j = 0; j < mvSize; j++) {
+        mvKeys[j] = getKeyForValue(longValues[i][j]);
+      }
+      groupKeys[i] = mvKeys;
+    }
+  }
+
+  private void generateKeysForFloatValuesMV(float[][] floatValues, int[][] groupKeys, int numDocs) {
+    for (int i = 0; i < numDocs; i++) {
+      int mvSize = floatValues[i].length;
+      int[] mvKeys = new int[mvSize];
+      for (int j = 0; j < mvSize; j++) {
+        mvKeys[j] = getKeyForValue(floatValues[i][j]);
+      }
+      groupKeys[i] = mvKeys;
+    }
+  }
+
+  private void generateKeysForDoubleValuesMV(double[][] doubleValues, int[][] groupKeys, int numDocs) {
+    for (int i = 0; i < numDocs; i++) {
+      int mvSize = doubleValues[i].length;
+      int[] mvKeys = new int[mvSize];
+      for (int j = 0; j < mvSize; j++) {
+        mvKeys[j] = getKeyForValue(doubleValues[i][j]);
+      }
+      groupKeys[i] = mvKeys;
+    }
+  }
+
+  private void generateKeysForStringValuesMV(String[][] stringValues, int[][] groupKeys, int numDocs) {
+    for (int i = 0; i < numDocs; i++) {
+      int mvSize = stringValues[i].length;
+      int[] mvKeys = new int[mvSize];
+      for (int j = 0; j < mvSize; j++) {
+        mvKeys[j] = getKeyForValue(stringValues[i][j]);
+      }
+      groupKeys[i] = mvKeys;
+    }
+  }
+
+//Refactoring end
 
   @Override
   public int getCurrentGroupKeyUpperBound() {

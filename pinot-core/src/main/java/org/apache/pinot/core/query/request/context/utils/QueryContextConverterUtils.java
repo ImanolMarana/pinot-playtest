@@ -53,18 +53,53 @@ public class QueryContextConverterUtils {
    */
   public static QueryContext getQueryContext(PinotQuery pinotQuery) {
     // FROM
-    String tableName;
-    DataSource dataSource = pinotQuery.getDataSource();
-    tableName = dataSource.getTableName();
-    QueryContext subquery = null;
-    if (dataSource.getSubquery() != null) {
-      subquery = getQueryContext(dataSource.getSubquery());
-    }
+    String tableName = getTableName(pinotQuery);
+    QueryContext subquery = getSubquery(pinotQuery);
 
     // SELECT
-    List<ExpressionContext> selectExpressions;
-    boolean distinct = false;
+    SelectComponents selectComponents = extractSelectComponents(pinotQuery);
+
+    // WHERE
+    FilterContext filter = getFilter(pinotQuery);
+
+    // GROUP BY
+    List<ExpressionContext> groupByExpressions = getGroupBys(pinotQuery);
+
+    // ORDER BY
+    List<OrderByExpressionContext> orderByExpressions = getOrderByExpressions(pinotQuery);
+
+    // HAVING
+    FilterContext havingFilter = getHavingFilter(pinotQuery);
+
+    // EXPRESSION OVERRIDE HINTS
+    Map<ExpressionContext, ExpressionContext> expressionContextOverrideHints =
+        getExpressionOverrideHints(pinotQuery);
+
+    return new QueryContext.Builder().setTableName(tableName).setSubquery(subquery)
+        .setSelectExpressions(selectComponents.selectExpressions).setDistinct(selectComponents.distinct)
+        .setAliasList(selectComponents.aliasList).setFilter(filter).setGroupByExpressions(groupByExpressions)
+        .setOrderByExpressions(orderByExpressions).setHavingFilter(havingFilter)
+        .setLimit(pinotQuery.getLimit()).setOffset(pinotQuery.getOffset())
+        .setQueryOptions(pinotQuery.getQueryOptions())
+        .setExpressionOverrideHints(expressionContextOverrideHints).setExplain(pinotQuery.isExplain())
+        .build();
+  }
+
+  private static String getTableName(PinotQuery pinotQuery) {
+    return pinotQuery.getDataSource().getTableName();
+  }
+
+  private static QueryContext getSubquery(PinotQuery pinotQuery) {
+    DataSource dataSource = pinotQuery.getDataSource();
+    if (dataSource.getSubquery() != null) {
+      return getQueryContext(dataSource.getSubquery());
+    }
+    return null;
+  }
+
+  private static SelectComponents extractSelectComponents(PinotQuery pinotQuery) {
     List<Expression> selectList = pinotQuery.getSelectList();
+    boolean distinct = false;
     // Handle DISTINCT
     if (selectList.size() == 1) {
       Function function = selectList.get(0).getFunctionCall();
@@ -73,8 +108,9 @@ public class QueryContextConverterUtils {
         selectList = function.getOperands();
       }
     }
+
     List<String> aliasList = new ArrayList<>(selectList.size());
-    selectExpressions = new ArrayList<>(selectList.size());
+    List<ExpressionContext> selectExpressions = new ArrayList<>(selectList.size());
     for (Expression thriftExpression : selectList) {
       // Handle alias
       Function function = thriftExpression.getFunctionCall();
@@ -90,33 +126,51 @@ public class QueryContextConverterUtils {
       }
       selectExpressions.add(RequestContextUtils.getExpression(expressionWithoutAlias));
     }
+    return new SelectComponents(selectExpressions, distinct, aliasList);
+  }
 
-    // WHERE
-    FilterContext filter = null;
+  private static class SelectComponents {
+    List<ExpressionContext> selectExpressions;
+    boolean distinct;
+    List<String> aliasList;
+
+    public SelectComponents(List<ExpressionContext> selectExpressions, boolean distinct,
+        List<String> aliasList) {
+      this.selectExpressions = selectExpressions;
+      this.distinct = distinct;
+      this.aliasList = aliasList;
+    }
+  }
+
+  private static FilterContext getFilter(PinotQuery pinotQuery) {
     Expression filterExpression = pinotQuery.getFilterExpression();
     if (filterExpression != null) {
-      filter = RequestContextUtils.getFilter(filterExpression);
+      FilterContext filter = RequestContextUtils.getFilter(filterExpression);
       // Remove the filter if it is always true
       if (filter.isConstantTrue()) {
-        filter = null;
+        return null;
       }
+      return filter;
     }
+    return null;
+  }
 
-    // GROUP BY
-    List<ExpressionContext> groupByExpressions = null;
+  private static List<ExpressionContext> getGroupBys(PinotQuery pinotQuery) {
     List<Expression> groupByList = pinotQuery.getGroupByList();
     if (CollectionUtils.isNotEmpty(groupByList)) {
-      groupByExpressions = new ArrayList<>(groupByList.size());
+      List<ExpressionContext> groupByExpressions = new ArrayList<>(groupByList.size());
       for (Expression thriftExpression : groupByList) {
         groupByExpressions.add(RequestContextUtils.getExpression(thriftExpression));
       }
+      return groupByExpressions;
     }
+    return null;
+  }
 
-    // ORDER BY
-    List<OrderByExpressionContext> orderByExpressions = null;
+  private static List<OrderByExpressionContext> getOrderByExpressions(PinotQuery pinotQuery) {
     List<Expression> orderByList = pinotQuery.getOrderByList();
     if (CollectionUtils.isNotEmpty(orderByList)) {
-      orderByExpressions = new ArrayList<>(orderByList.size());
+      List<OrderByExpressionContext> orderByExpressions = new ArrayList<>(orderByList.size());
       Set<Expression> seen = new HashSet<>();
       for (Expression orderBy : orderByList) {
         Boolean isNullsLast = CalciteSqlParser.isNullsLast(orderBy);
@@ -124,28 +178,36 @@ public class QueryContextConverterUtils {
         Expression orderByFunctionsRemoved = CalciteSqlParser.removeOrderByFunctions(orderBy);
         // Deduplicate the order-by expressions
         if (seen.add(orderByFunctionsRemoved)) {
-          ExpressionContext expressionContext = RequestContextUtils.getExpression(orderByFunctionsRemoved);
+          ExpressionContext expressionContext =
+              RequestContextUtils.getExpression(orderByFunctionsRemoved);
           if (isNullsLast != null) {
-            orderByExpressions.add(new OrderByExpressionContext(expressionContext, isAsc, isNullsLast));
+            orderByExpressions
+                .add(new OrderByExpressionContext(expressionContext, isAsc, isNullsLast));
           } else {
             orderByExpressions.add(new OrderByExpressionContext(expressionContext, isAsc));
           }
         }
       }
+      return orderByExpressions;
     }
+    return null;
+  }
 
-    // HAVING
-    FilterContext havingFilter = null;
+  private static FilterContext getHavingFilter(PinotQuery pinotQuery) {
     Expression havingExpression = pinotQuery.getHavingExpression();
     if (havingExpression != null) {
-      havingFilter = RequestContextUtils.getFilter(havingExpression);
+      FilterContext havingFilter = RequestContextUtils.getFilter(havingExpression);
       // Remove the filter if it is always true
       if (havingFilter.isConstantTrue()) {
-        havingFilter = null;
+        return null;
       }
+      return havingFilter;
     }
+    return null;
+  }
 
-    // EXPRESSION OVERRIDE HINTS
+  private static Map<ExpressionContext, ExpressionContext> getExpressionOverrideHints(
+      PinotQuery pinotQuery) {
     Map<ExpressionContext, ExpressionContext> expressionContextOverrideHints = new HashMap<>();
     Map<Expression, Expression> expressionOverrideHints = pinotQuery.getExpressionOverrideHints();
     if (expressionOverrideHints != null) {
@@ -154,12 +216,7 @@ public class QueryContextConverterUtils {
             RequestContextUtils.getExpression(entry.getValue()));
       }
     }
-
-    return new QueryContext.Builder().setTableName(tableName).setSubquery(subquery)
-        .setSelectExpressions(selectExpressions).setDistinct(distinct).setAliasList(aliasList).setFilter(filter)
-        .setGroupByExpressions(groupByExpressions).setOrderByExpressions(orderByExpressions)
-        .setHavingFilter(havingFilter).setLimit(pinotQuery.getLimit()).setOffset(pinotQuery.getOffset())
-        .setQueryOptions(pinotQuery.getQueryOptions()).setExpressionOverrideHints(expressionContextOverrideHints)
-        .setExplain(pinotQuery.isExplain()).build();
+    return expressionContextOverrideHints;
   }
-}
+
+//Refactoring end

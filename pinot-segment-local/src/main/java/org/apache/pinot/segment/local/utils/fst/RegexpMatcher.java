@@ -81,11 +81,97 @@ public class RegexpMatcher {
    */
   public List<Long> regexMatchOnFST()
       throws IOException {
-    final List<Path<Long>> queue = new ArrayList<>();
-    final List<Path<Long>> endNodes = new ArrayList<>();
     if (_automaton.getNumStates() == 0) {
       return Collections.emptyList();
     }
+
+    return collectMatchingValuesFromFST();
+  }
+
+  private List<Long> collectMatchingValuesFromFST() throws IOException {
+    final List<Path<Long>> queue = new ArrayList<>();
+    final List<Path<Long>> endNodes = new ArrayList<>();
+    queue.add(new Path<>(0, _fst.getFirstArc(new FST.Arc<Long>()), _fst.outputs.getNoOutput(), new IntsRefBuilder()));
+
+    final FST.Arc<Long> scratchArc = new FST.Arc<>();
+    final FST.BytesReader fstReader = _fst.getBytesReader();
+
+    Transition t = new Transition();
+    while (!queue.isEmpty()) {
+      final Path<Long> path = queue.remove(queue.size() - 1);
+      processPath(path, queue, endNodes, scratchArc, fstReader, t);
+    }
+
+    return extractOutputValues(endNodes);
+  }
+
+  private void processPath(Path<Long> path, List<Path<Long>> queue, List<Path<Long>> endNodes,
+      FST.Arc<Long> scratchArc, FST.BytesReader fstReader, Transition t) throws IOException {
+    if (_automaton.isAccept(path._state)) {
+      addIfFinalState(path, endNodes);
+    }
+
+    findMatchingTransitions(path, queue, scratchArc, fstReader, t);
+  }
+
+  private void addIfFinalState(Path<Long> path, List<Path<Long>> endNodes) {
+    if (path._fstNode.isFinal()) {
+      endNodes.add(path);
+    }
+  }
+
+  private void findMatchingTransitions(Path<Long> path, List<Path<Long>> queue, FST.Arc<Long> scratchArc,
+      FST.BytesReader fstReader, Transition t) throws IOException {
+    IntsRefBuilder currentInput = path._input;
+    int count = _automaton.initTransition(path._state, t);
+    for (int i = 0; i < count; i++) {
+      _automaton.getNextTransition(t);
+      final int min = t.min;
+      final int max = t.max;
+      if (min == max) {
+        addSingleTransitionTarget(path, queue, scratchArc, fstReader, t, min);
+      } else {
+        addMultipleTransitionTargets(path, queue, fstReader, t, min, max, scratchArc);
+      }
+    }
+  }
+
+  private void addMultipleTransitionTargets(Path<Long> path, List<Path<Long>> queue,
+      FST.BytesReader fstReader, Transition t, int min, int max, FST.Arc<Long> scratchArc)
+      throws IOException {
+    FST.Arc<Long> nextArc = Util.readCeilArc(min, _fst, path._fstNode, scratchArc, fstReader);
+    while (nextArc != null && nextArc.label() <= max) {
+      addTransitionTarget(path, queue, t, nextArc);
+      nextArc = nextArc.isLast() ? null : _fst.readNextRealArc(nextArc, fstReader);
+    }
+  }
+
+  private void addSingleTransitionTarget(Path<Long> path, List<Path<Long>> queue,
+      FST.Arc<Long> scratchArc, FST.BytesReader fstReader, Transition t, int min) {
+    final FST.Arc<Long> nextArc = _fst.findTargetArc(min, path._fstNode, scratchArc, fstReader);
+    if (nextArc != null) {
+      addTransitionTarget(path, queue, t, nextArc);
+    }
+  }
+
+  private void addTransitionTarget(Path<Long> path, List<Path<Long>> queue, Transition t,
+      FST.Arc<Long> nextArc) {
+    final IntsRefBuilder newInput = new IntsRefBuilder();
+    newInput.copyInts(path._input.get());
+    newInput.append(nextArc.label());
+    queue.add(new Path<>(t.dest, new FST.Arc<Long>().copyFrom(nextArc),
+        _fst.outputs.add(path._output, nextArc.output()), newInput));
+  }
+
+  private ArrayList<Long> extractOutputValues(List<Path<Long>> endNodes) {
+    ArrayList<Long> matchedIds = new ArrayList<>();
+    for (Path<Long> path : endNodes) {
+      matchedIds.add(path._output);
+    }
+    return matchedIds;
+  }
+
+//Refactoring end
 
     // Automaton start state and FST start node is added to the queue.
     queue.add(new Path<>(0, _fst.getFirstArc(new FST.Arc<Long>()), _fst.outputs.getNoOutput(), new IntsRefBuilder()));

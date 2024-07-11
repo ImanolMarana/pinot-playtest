@@ -166,27 +166,35 @@ public class HelixInstanceDataManager implements InstanceDataManager {
   private void initInstanceDataDir(File instanceDataDir) {
     if (!instanceDataDir.exists()) {
       Preconditions.checkState(instanceDataDir.mkdirs(), "Failed to create instance data dir: %s", instanceDataDir);
-    } else {
-      // Clean up the _tmp (consuming segments) dir and empty table data dir
-      File[] tableDataDirs = instanceDataDir.listFiles((dir, name) -> TableNameBuilder.isTableResource(name));
-      if (tableDataDirs != null) {
-        for (File tableDataDir : tableDataDirs) {
-          File resourceTempDir = new File(tableDataDir, RealtimeSegmentDataManager.RESOURCE_TEMP_DIR_NAME);
-          try {
-            FileUtils.deleteDirectory(resourceTempDir);
-          } catch (IOException e) {
-            LOGGER.error("Failed to delete temporary resource dir: {}, continue with error", resourceTempDir, e);
-          }
-          try {
-            if (FileUtils.isEmptyDirectory(tableDataDir)) {
-              FileUtils.deleteDirectory(tableDataDir);
-            }
-          } catch (IOException e) {
-            LOGGER.error("Failed to delete empty table data dir: {}, continue with error", tableDataDir, e);
-          }
-        }
+      return;
+    }
+
+    // Clean up the _tmp (consuming segments) dir and empty table data dir
+    File[] tableDataDirs = instanceDataDir.listFiles((dir, name) -> TableNameBuilder.isTableResource(name));
+    if (tableDataDirs != null) {
+      for (File tableDataDir : tableDataDirs) {
+        cleanupTableDataDir(tableDataDir);
       }
     }
+  }
+
+  private void cleanupTableDataDir(File tableDataDir) {
+    File resourceTempDir = new File(tableDataDir, RealtimeSegmentDataManager.RESOURCE_TEMP_DIR_NAME);
+    try {
+      FileUtils.deleteDirectory(resourceTempDir);
+    } catch (IOException e) {
+      LOGGER.error("Failed to delete temporary resource dir: {}, continue with error", resourceTempDir, e);
+    }
+    try {
+      if (FileUtils.isEmptyDirectory(tableDataDir)) {
+        FileUtils.deleteDirectory(tableDataDir);
+      }
+    } catch (IOException e) {
+      LOGGER.error("Failed to delete empty table data dir: {}, continue with error", tableDataDir, e);
+    }
+  }
+
+//Refactoring end
   }
 
   @Override

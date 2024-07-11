@@ -100,90 +100,98 @@ public class PinotUpsertRestletResource {
           + " This allows us to estimate table size before onboarding.")
   // TODO: Switch to use TableConfigs
   public String estimateHeapUsage(String tableSchemaConfigStr,
-      @ApiParam(value = "cardinality", required = true) @QueryParam("cardinality") long cardinality,
-      @ApiParam(value = "primaryKeySize", defaultValue = "-1") @QueryParam("primaryKeySize") int primaryKeySize,
-      @ApiParam(value = "numPartitions", defaultValue = "-1") @QueryParam("numPartitions") int numPartitions,
-      @Context HttpHeaders headers) {
-    ObjectNode resultData = JsonUtils.newObjectNode();
-    TableAndSchemaConfig tableSchemaConfig;
-
-    try {
-      tableSchemaConfig = JsonUtils.stringToObject(tableSchemaConfigStr, TableAndSchemaConfig.class);
-    } catch (IOException e) {
-      throw new ControllerApplicationException(LOGGER,
-          String.format("Invalid TableSchemaConfigs json string: %s", tableSchemaConfigStr),
-          Response.Status.BAD_REQUEST, e);
-    }
-
-    TableConfig tableConfig = tableSchemaConfig.getTableConfig();
-    String tableNameWithType = DatabaseUtils.translateTableName(tableConfig.getTableName(), headers);
-    tableConfig.setTableName(tableNameWithType);
-    Schema schema = tableSchemaConfig.getSchema();
-
-    resultData.put("tableName", tableNameWithType);
-
-    // Estimated key space, it contains primary key columns.
-    int bytesPerKey = 0;
-    List<String> primaryKeys = schema.getPrimaryKeyColumns();
-
-    if (primaryKeySize > 0) {
-      bytesPerKey = primaryKeySize;
-    } else {
-      for (String primaryKey : primaryKeys) {
-        FieldSpec.DataType dt = schema.getFieldSpecFor(primaryKey).getDataType();
-        if (!dt.isFixedWidth()) {
-          String msg = "Primary key sizes much be provided for non fixed-width columns";
-          throw new ControllerApplicationException(LOGGER, msg, Response.Status.BAD_REQUEST);
-        } else {
-          bytesPerKey += dt.size();
+          @ApiParam(value = "cardinality", required = true) @QueryParam("cardinality") long cardinality,
+          @ApiParam(value = "primaryKeySize", defaultValue = "-1") @QueryParam("primaryKeySize") int primaryKeySize,
+          @ApiParam(value = "numPartitions", defaultValue = "-1") @QueryParam("numPartitions") int numPartitions,
+          @Context HttpHeaders headers) {
+        ObjectNode resultData = JsonUtils.newObjectNode();
+        TableAndSchemaConfig tableSchemaConfig;
+    
+        try {
+          tableSchemaConfig = JsonUtils.stringToObject(tableSchemaConfigStr, TableAndSchemaConfig.class);
+        } catch (IOException e) {
+          throw new ControllerApplicationException(LOGGER,
+              String.format("Invalid TableSchemaConfigs json string: %s", tableSchemaConfigStr),
+              Response.Status.BAD_REQUEST, e);
         }
+    
+        TableConfig tableConfig = tableSchemaConfig.getTableConfig();
+        String tableNameWithType = DatabaseUtils.translateTableName(tableConfig.getTableName(), headers);
+        tableConfig.setTableName(tableNameWithType);
+        Schema schema = tableSchemaConfig.getSchema();
+    
+        resultData.put("tableName", tableNameWithType);
+    
+        int bytesPerKey = calculateBytesPerKey(schema, primaryKeySize);
+        int bytesPerValue = calculateBytesPerValue(tableConfig, schema);
+    
+        resultData.put("bytesPerKey", bytesPerKey);
+        resultData.put("bytesPerValue", bytesPerValue);
+    
+        long totalKeySpace = bytesPerKey * cardinality;
+        long totalValueSpace = bytesPerValue * cardinality;
+        long totalSpace = totalKeySpace + totalValueSpace;
+    
+        resultData.put("totalKeySpace(bytes)", totalKeySpace);
+        resultData.put("totalValueSpace(bytes)", totalValueSpace);
+        resultData.put("totalSpace(bytes)", totalSpace);
+    
+        if (numPartitions > 0) {
+          double totalSpacePerPartition = (totalSpace * 1.0) / numPartitions;
+          resultData.put("numPartitions", numPartitions);
+          resultData.put("totalSpacePerPartition(bytes)", totalSpacePerPartition);
+        }
+        return resultData.toString();
       }
-      // Java has a 24 bytes array overhead and there's also 8 bytes for the actual array object
-      bytesPerKey += 32;
-    }
-
-    // Estimated value space, it contains <segmentName, DocId, ComparisonValue(timestamp)> and overhead.
-    // Here we only calculate the map content size. TODO: Add the map entry size and the array size within the map.
-    int bytesPerValue = 60;
-    List<String> comparisonColumns = tableConfig.getUpsertConfig().getComparisonColumns();
-    if (comparisonColumns != null) {
-      int bytesPerArrayElem = 8;  // object ref
-      bytesPerValue = 52;
-      for (String columnName : comparisonColumns) {
-        FieldSpec.DataType dt = schema.getFieldSpecFor(columnName).getDataType();
-        if (!dt.isFixedWidth()) {
-          String msg = "Not support data types for the comparison column";
-          throw new ControllerApplicationException(LOGGER, msg, Response.Status.BAD_REQUEST);
-        } else {
-          if (comparisonColumns.size() == 1) {
-            bytesPerValue += dt.size();
+    
+      private int calculateBytesPerKey(Schema schema, int primaryKeySize) {
+        if (primaryKeySize > 0) {
+          return primaryKeySize;
+        }
+    
+        int bytesPerKey = 0;
+        List<String> primaryKeys = schema.getPrimaryKeyColumns();
+        for (String primaryKey : primaryKeys) {
+          FieldSpec.DataType dt = schema.getFieldSpecFor(primaryKey).getDataType();
+          if (!dt.isFixedWidth()) {
+            String msg = "Primary key sizes much be provided for non fixed-width columns";
+            throw new ControllerApplicationException(LOGGER, msg, Response.Status.BAD_REQUEST);
           } else {
-            bytesPerValue += bytesPerArrayElem + dt.size();
+            bytesPerKey += dt.size();
           }
         }
+        // Java has a 24 bytes array overhead and there's also 8 bytes for the actual array object
+        return bytesPerKey + 32;
       }
-      if (comparisonColumns.size() > 1) {
-        bytesPerValue += 48 + 4;  // array overhead + comparableIndex integer
+    
+      private int calculateBytesPerValue(TableConfig tableConfig, Schema schema) {
+        // Estimated value space, it contains <segmentName, DocId, ComparisonValue(timestamp)> and overhead.
+        // Here we only calculate the map content size. TODO: Add the map entry size and the array size within the map.
+        int bytesPerValue = 60;
+        List<String> comparisonColumns = tableConfig.getUpsertConfig().getComparisonColumns();
+        if (comparisonColumns != null) {
+          int bytesPerArrayElem = 8;  // object ref
+          bytesPerValue = 52;
+          for (String columnName : comparisonColumns) {
+            FieldSpec.DataType dt = schema.getFieldSpecFor(columnName).getDataType();
+            if (!dt.isFixedWidth()) {
+              String msg = "Not support data types for the comparison column";
+              throw new ControllerApplicationException(LOGGER, msg, Response.Status.BAD_REQUEST);
+            } else {
+              if (comparisonColumns.size() == 1) {
+                bytesPerValue += dt.size();
+              } else {
+                bytesPerValue += bytesPerArrayElem + dt.size();
+              }
+            }
+          }
+          if (comparisonColumns.size() > 1) {
+            bytesPerValue += 48 + 4;  // array overhead + comparableIndex integer
+          }
+        }
+        return bytesPerValue;
       }
-    }
 
-    resultData.put("bytesPerKey", bytesPerKey);
-    resultData.put("bytesPerValue", bytesPerValue);
-
-    long totalKeySpace = bytesPerKey * cardinality;
-    long totalValueSpace = bytesPerValue * cardinality;
-    long totalSpace = totalKeySpace + totalValueSpace;
-
-    resultData.put("totalKeySpace(bytes)", totalKeySpace);
-    resultData.put("totalValueSpace(bytes)", totalValueSpace);
-    resultData.put("totalSpace(bytes)", totalSpace);
-
-    // Use Partitions, replicas to calculate memoryPerHost for host assignment.
-    if (numPartitions > 0) {
-      double totalSpacePerPartition = (totalSpace * 1.0) / numPartitions;
-      resultData.put("numPartitions", numPartitions);
-      resultData.put("totalSpacePerPartition(bytes)", totalSpacePerPartition);
-    }
-    return resultData.toString();
+//Refactoring end
   }
 }

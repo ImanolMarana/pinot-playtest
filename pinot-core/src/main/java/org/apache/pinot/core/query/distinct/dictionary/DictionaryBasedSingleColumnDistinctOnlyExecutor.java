@@ -38,27 +38,39 @@ public class DictionaryBasedSingleColumnDistinctOnlyExecutor extends BaseDiction
 
   @Override
   public boolean process(ValueBlock valueBlock) {
-    BlockValSet blockValueSet = valueBlock.getBlockValueSet(_expression);
-    int numDocs = valueBlock.getNumDocs();
-    if (blockValueSet.isSingleValue()) {
-      int[] dictIds = blockValueSet.getDictionaryIdsSV();
-      for (int i = 0; i < numDocs; i++) {
-        _dictIdSet.add(dictIds[i]);
-        if (_dictIdSet.size() >= _limit) {
-          return true;
-        }
-      }
-    } else {
-      int[][] dictIds = blockValueSet.getDictionaryIdsMV();
-      for (int i = 0; i < numDocs; i++) {
-        for (int dictId : dictIds[i]) {
-          _dictIdSet.add(dictId);
-          if (_dictIdSet.size() >= _limit) {
-            return true;
-          }
-        }
+  BlockValSet blockValueSet = valueBlock.getBlockValueSet(_expression);
+  int numDocs = valueBlock.getNumDocs();
+  if (blockValueSet.isSingleValue()) {
+    return processSingleValue(blockValueSet, numDocs);
+  } else {
+    return processMultiValue(blockValueSet, numDocs);
+  }
+}
+
+private boolean processSingleValue(BlockValSet blockValueSet, int numDocs) {
+  int[] dictIds = blockValueSet.getDictionaryIdsSV();
+  for (int i = 0; i < numDocs; i++) {
+    _dictIdSet.add(dictIds[i]);
+    if (_dictIdSet.size() >= _limit) {
+      return true;
+    }
+  }
+  return false;
+}
+
+private boolean processMultiValue(BlockValSet blockValueSet, int numDocs) {
+  int[][] dictIds = blockValueSet.getDictionaryIdsMV();
+  for (int i = 0; i < numDocs; i++) {
+    for (int dictId : dictIds[i]) {
+      _dictIdSet.add(dictId);
+      if (_dictIdSet.size() >= _limit) {
+        return true;
       }
     }
-    return false;
+  }
+  return false;
+}
+
+//Refactoring end
   }
 }

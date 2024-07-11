@@ -83,25 +83,37 @@ public abstract class LogicalOperatorTransformFunction extends BaseTransformFunc
     RoaringBitmap nullBitmap = new RoaringBitmap();
     boolean[] supersedesNull = new boolean[numDocs];
     for (int i = 0; i < numArguments; i++) {
-      int[] intValues = _arguments.get(i).transformToIntValuesSV(valueBlock);
-      RoaringBitmap argumentNullBitmap = _arguments.get(i).getNullBitmap(valueBlock);
-      for (int docId = 0; docId < numDocs; docId++) {
-        if ((argumentNullBitmap == null || !argumentNullBitmap.contains(docId)) && valueSupersedesNull(
-            intValues[docId])) {
-          supersedesNull[docId] = true;
-          nullBitmap.remove(docId);
-        }
-      }
-      if (argumentNullBitmap != null) {
-        for (int docId : argumentNullBitmap) {
-          if (!supersedesNull[docId]) {
-            nullBitmap.add(docId);
-          }
-        }
-      }
+      nullBitmap = updateNullBitmap(valueBlock, i, nullBitmap, supersedesNull);
     }
     return nullBitmap.isEmpty() ? null : nullBitmap;
   }
+
+  private RoaringBitmap updateNullBitmap(ValueBlock valueBlock, int i, RoaringBitmap nullBitmap,
+      boolean[] supersedesNull) {
+    int numDocs = valueBlock.getNumDocs();
+    int[] intValues = _arguments.get(i).transformToIntValuesSV(valueBlock);
+    RoaringBitmap argumentNullBitmap = _arguments.get(i).getNullBitmap(valueBlock);
+    for (int docId = 0; docId < numDocs; docId++) {
+      if ((argumentNullBitmap == null || !argumentNullBitmap.contains(docId)) && valueSupersedesNull(
+          intValues[docId])) {
+        supersedesNull[docId] = true;
+        nullBitmap.remove(docId);
+      }
+    }
+    if (argumentNullBitmap != null) {
+      for (int docId : argumentNullBitmap) {
+        if (!supersedesNull[docId]) {
+          nullBitmap.add(docId);
+        }
+      }
+    }
+    return nullBitmap;
+  }
+
+  abstract int getLogicalFuncResult(int left, int right);
+
+  abstract boolean valueSupersedesNull(int i);
+//Refactoring end
 
   abstract int getLogicalFuncResult(int left, int right);
 

@@ -512,30 +512,52 @@ public class DistinctCountCPCSketchAggregationFunction
 
   private void addObjectsToSketch(Object[] rawValues, CpcSketch sketch) {
     if (rawValues instanceof String[]) {
-      for (String s : (String[]) rawValues) {
-        sketch.update(s);
-      }
+      addStringsToSketch((String[]) rawValues, sketch);
     } else if (rawValues instanceof Integer[]) {
-      for (Integer i : (Integer[]) rawValues) {
-        sketch.update(i);
-      }
+      addIntegersToSketch((Integer[]) rawValues, sketch);
     } else if (rawValues instanceof Long[]) {
-      for (Long l : (Long[]) rawValues) {
-        sketch.update(l);
-      }
+      addLongsToSketch((Long[]) rawValues, sketch);
     } else if (rawValues instanceof Double[]) {
-      for (Double d : (Double[]) rawValues) {
-        sketch.update(d);
-      }
+      addDoublesToSketch((Double[]) rawValues, sketch);
     } else if (rawValues instanceof Float[]) {
-      for (Float f : (Float[]) rawValues) {
-        sketch.update(f);
-      }
+      addFloatsToSketch((Float[]) rawValues, sketch);
     } else {
       throw new IllegalStateException(
           "Unsupported data type for CPC Sketch aggregation: " + rawValues.getClass().getSimpleName());
     }
   }
+  
+  private void addStringsToSketch(String[] rawValues, CpcSketch sketch) {
+    for (String s : rawValues) {
+      sketch.update(s);
+    }
+  }
+  
+  private void addIntegersToSketch(Integer[] rawValues, CpcSketch sketch) {
+    for (Integer i : rawValues) {
+      sketch.update(i);
+    }
+  }
+  
+  private void addLongsToSketch(Long[] rawValues, CpcSketch sketch) {
+    for (Long l : rawValues) {
+      sketch.update(l);
+    }
+  }
+  
+  private void addDoublesToSketch(Double[] rawValues, CpcSketch sketch) {
+    for (Double d : rawValues) {
+      sketch.update(d);
+    }
+  }
+  
+  private void addFloatsToSketch(Float[] rawValues, CpcSketch sketch) {
+    for (Float f : rawValues) {
+      sketch.update(f);
+    }
+  }
+
+//Refactoring end
 
   /**
    * Returns the accumulator from the result holder or creates a new one if it does not exist.

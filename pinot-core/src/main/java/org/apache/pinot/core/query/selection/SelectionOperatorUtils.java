@@ -179,80 +179,123 @@ public class SelectionOperatorUtils {
     ColumnDataType[] columnDataTypesInDataSchema = dataSchema.getColumnDataTypes();
     int numColumnsInDataSchema = columnDataTypesInDataSchema.length;
 
-    // No order-by expression
     // NOTE: Order-by expressions are ignored for queries with LIMIT 0.
     List<OrderByExpressionContext> orderByExpressions = queryContext.getOrderByExpressions();
     if (orderByExpressions == null || queryContext.getLimit() == 0) {
-      // For 'SELECT *', use the server response data schema as the final results data schema.
-      if ((numSelectExpressions == 1 && selectExpressions.get(0).equals(IDENTIFIER_STAR))) {
-        int[] columnIndices = new int[numColumnsInDataSchema];
-        for (int i = 0; i < numColumnsInDataSchema; i++) {
-          columnIndices[i] = i;
-        }
-        return Pair.of(dataSchema, columnIndices);
-      }
-
-      // For select without duplicate columns, the order of the final selection columns is the same as the order of the
-      // columns in the data schema.
-      if (numSelectExpressions == numColumnsInDataSchema) {
-        String[] columnNames = new String[numSelectExpressions];
-        int[] columnIndices = new int[numSelectExpressions];
-        for (int i = 0; i < numSelectExpressions; i++) {
-          columnNames[i] = selectExpressions.get(i).toString();
-          columnIndices[i] = i;
-        }
-        return Pair.of(new DataSchema(columnNames, columnDataTypesInDataSchema), columnIndices);
-      }
-
-      // For select with duplicate columns, construct a map from expression to index with the same order as the data
-      // schema, then look up the selection expressions.
-      Object2IntOpenHashMap<ExpressionContext> expressionIndexMap = new Object2IntOpenHashMap<>(numColumnsInDataSchema);
-      for (ExpressionContext selectExpression : selectExpressions) {
-        expressionIndexMap.putIfAbsent(selectExpression, expressionIndexMap.size());
-      }
-      Preconditions.checkState(expressionIndexMap.size() == numColumnsInDataSchema,
-          "BUG: Expect same number of deduped columns in SELECT clause and in data schema, got %s before dedup and %s"
-              + " after dedup in SELECT clause, %s in data schema", numSelectExpressions, expressionIndexMap.size(),
+      return handleNoOrderBy(selectExpressions, numSelectExpressions, dataSchema, columnDataTypesInDataSchema,
           numColumnsInDataSchema);
-      String[] columnNames = new String[numSelectExpressions];
-      ColumnDataType[] columnDataTypes = new ColumnDataType[numSelectExpressions];
-      int[] columnIndices = new int[numSelectExpressions];
-      for (int i = 0; i < numSelectExpressions; i++) {
-        ExpressionContext selectExpression = selectExpressions.get(i);
-        int columnIndex = expressionIndexMap.getInt(selectExpression);
-        columnNames[i] = selectExpression.toString();
-        columnDataTypes[i] = columnDataTypesInDataSchema[columnIndex];
-        columnIndices[i] = columnIndex;
+    } else {
+      return handleOrderBy(selectExpressions, numSelectExpressions, dataSchema, columnDataTypesInDataSchema,
+          numColumnsInDataSchema, orderByExpressions);
+    }
+  }
+
+  private static Pair<DataSchema, int[]> handleNoOrderBy(List<ExpressionContext> selectExpressions,
+      int numSelectExpressions, DataSchema dataSchema, ColumnDataType[] columnDataTypesInDataSchema,
+      int numColumnsInDataSchema) {
+    // For 'SELECT *', use the server response data schema as the final results data schema.
+    if ((numSelectExpressions == 1 && selectExpressions.get(0).equals(IDENTIFIER_STAR))) {
+      int[] columnIndices = new int[numColumnsInDataSchema];
+      for (int i = 0; i < numColumnsInDataSchema; i++) {
+        columnIndices[i] = i;
       }
-      return Pair.of(new DataSchema(columnNames, columnDataTypes), columnIndices);
+      return Pair.of(dataSchema, columnIndices);
     }
 
+    // For select without duplicate columns, the order of the final selection columns is the same as the order of the
+    // columns in the data schema.
+    if (numSelectExpressions == numColumnsInDataSchema) {
+      return getSchemaAndIndicesForNonDuplicateColumns(selectExpressions, columnDataTypesInDataSchema);
+    }
+
+    // For select with duplicate columns, construct a map from expression to index with the same order as the data
+    // schema, then look up the selection expressions.
+    return getSchemaAndIndicesForDuplicateColumns(selectExpressions, numColumnsInDataSchema,
+        columnDataTypesInDataSchema);
+  }
+
+  private static Pair<DataSchema, int[]> handleOrderBy(List<ExpressionContext> selectExpressions,
+      int numSelectExpressions, DataSchema dataSchema, ColumnDataType[] columnDataTypesInDataSchema,
+      int numColumnsInDataSchema, List<OrderByExpressionContext> orderByExpressions) {
     // For 'SELECT *' with order-by, exclude transform functions from the returned columns and sort.
     if (numSelectExpressions == 1 && selectExpressions.get(0).equals(IDENTIFIER_STAR)) {
-      String[] columnNamesInDataSchema = dataSchema.getColumnNames();
-      List<Integer> columnIndexList = new ArrayList<>(columnNamesInDataSchema.length);
-      for (int i = 0; i < columnNamesInDataSchema.length; i++) {
-        if (columnNamesInDataSchema[i].indexOf('(') == -1) {
-          columnIndexList.add(i);
-        }
-      }
-      columnIndexList.sort(Comparator.comparing(o -> columnNamesInDataSchema[o]));
-      int numColumns = columnIndexList.size();
-      String[] columnNames = new String[numColumns];
-      ColumnDataType[] columnDataTypes = new ColumnDataType[numColumns];
-      int[] columnIndices = new int[numColumns];
-      for (int i = 0; i < numColumns; i++) {
-        int columnIndex = columnIndexList.get(i);
-        columnNames[i] = columnNamesInDataSchema[columnIndex];
-        columnDataTypes[i] = columnDataTypesInDataSchema[columnIndex];
-        columnIndices[i] = columnIndex;
-      }
-      return Pair.of(new DataSchema(columnNames, columnDataTypes), columnIndices);
+      return getSchemaAndIndicesForStarWithOrderBy(dataSchema, columnDataTypesInDataSchema);
     }
 
     // For other order-by queries, construct a map from expression to index with the same order as the data schema,
     // then look up the selection expressions.
-    Object2IntOpenHashMap<ExpressionContext> expressionIndexMap = new Object2IntOpenHashMap<>(numColumnsInDataSchema);
+    return getSchemaAndIndicesForOrderBy(selectExpressions, numColumnsInDataSchema, columnDataTypesInDataSchema,
+        orderByExpressions);
+  }
+
+  private static Pair<DataSchema, int[]> getSchemaAndIndicesForNonDuplicateColumns(
+      List<ExpressionContext> selectExpressions, ColumnDataType[] columnDataTypesInDataSchema) {
+    int numSelectExpressions = selectExpressions.size();
+    String[] columnNames = new String[numSelectExpressions];
+    int[] columnIndices = new int[numSelectExpressions];
+    for (int i = 0; i < numSelectExpressions; i++) {
+      columnNames[i] = selectExpressions.get(i).toString();
+      columnIndices[i] = i;
+    }
+    return Pair.of(new DataSchema(columnNames, columnDataTypesInDataSchema), columnIndices);
+  }
+
+  private static Pair<DataSchema, int[]> getSchemaAndIndicesForDuplicateColumns(
+      List<ExpressionContext> selectExpressions, int numColumnsInDataSchema,
+      ColumnDataType[] columnDataTypesInDataSchema) {
+    int numSelectExpressions = selectExpressions.size();
+    Object2IntOpenHashMap<ExpressionContext> expressionIndexMap = new Object2IntOpenHashMap<>(
+        numColumnsInDataSchema);
+    for (ExpressionContext selectExpression : selectExpressions) {
+      expressionIndexMap.putIfAbsent(selectExpression, expressionIndexMap.size());
+    }
+    Preconditions.checkState(expressionIndexMap.size() == numColumnsInDataSchema,
+        "BUG: Expect same number of deduped columns in SELECT clause and in data schema, got %s before dedup and %s"
+            + " after dedup in SELECT clause, %s in data schema", numSelectExpressions,
+        expressionIndexMap.size(),
+        numColumnsInDataSchema);
+    String[] columnNames = new String[numSelectExpressions];
+    ColumnDataType[] columnDataTypes = new ColumnDataType[numSelectExpressions];
+    int[] columnIndices = new int[numSelectExpressions];
+    for (int i = 0; i < numSelectExpressions; i++) {
+      ExpressionContext selectExpression = selectExpressions.get(i);
+      int columnIndex = expressionIndexMap.getInt(selectExpression);
+      columnNames[i] = selectExpression.toString();
+      columnDataTypes[i] = columnDataTypesInDataSchema[columnIndex];
+      columnIndices[i] = columnIndex;
+    }
+    return Pair.of(new DataSchema(columnNames, columnDataTypes), columnIndices);
+  }
+
+  private static Pair<DataSchema, int[]> getSchemaAndIndicesForStarWithOrderBy(DataSchema dataSchema,
+      ColumnDataType[] columnDataTypesInDataSchema) {
+    String[] columnNamesInDataSchema = dataSchema.getColumnNames();
+    List<Integer> columnIndexList = new ArrayList<>(columnNamesInDataSchema.length);
+    for (int i = 0; i < columnNamesInDataSchema.length; i++) {
+      if (columnNamesInDataSchema[i].indexOf('(') == -1) {
+        columnIndexList.add(i);
+      }
+    }
+    columnIndexList.sort(Comparator.comparing(o -> columnNamesInDataSchema[o]));
+    int numColumns = columnIndexList.size();
+    String[] columnNames = new String[numColumns];
+    ColumnDataType[] columnDataTypes = new ColumnDataType[numColumns];
+    int[] columnIndices = new int[numColumns];
+    for (int i = 0; i < numColumns; i++) {
+      int columnIndex = columnIndexList.get(i);
+      columnNames[i] = columnNamesInDataSchema[columnIndex];
+      columnDataTypes[i] = columnDataTypesInDataSchema[columnIndex];
+      columnIndices[i] = columnIndex;
+    }
+    return Pair.of(new DataSchema(columnNames, columnDataTypes), columnIndices);
+  }
+
+  private static Pair<DataSchema, int[]> getSchemaAndIndicesForOrderBy(
+      List<ExpressionContext> selectExpressions, int numColumnsInDataSchema,
+      ColumnDataType[] columnDataTypesInDataSchema, List<OrderByExpressionContext> orderByExpressions) {
+    int numSelectExpressions = selectExpressions.size();
+    Object2IntOpenHashMap<ExpressionContext> expressionIndexMap = new Object2IntOpenHashMap<>(
+        numColumnsInDataSchema);
     // NOTE: Order-by expressions are already deduped in QueryContext.
     for (OrderByExpressionContext orderByExpression : orderByExpressions) {
       expressionIndexMap.put(orderByExpression.getExpression(), expressionIndexMap.size());
@@ -282,6 +325,7 @@ public class SelectionOperatorUtils {
     }
     return Pair.of(new DataSchema(columnNames, columnDataTypes), columnIndices);
   }
+//Refactoring end
 
   /**
    * Merge two partial results for selection queries without <code>ORDER BY</code>. (Server side)

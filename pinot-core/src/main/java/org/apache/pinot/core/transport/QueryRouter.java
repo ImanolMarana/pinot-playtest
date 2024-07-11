@@ -97,25 +97,8 @@ public class QueryRouter {
     boolean preferTls = _serverChannelsTls != null;
 
     // Build map from server to request based on the routing table
-    Map<ServerRoutingInstance, InstanceRequest> requestMap = new HashMap<>();
-    if (offlineBrokerRequest != null) {
-      assert offlineRoutingTable != null;
-      for (Map.Entry<ServerInstance, Pair<List<String>, List<String>>> entry : offlineRoutingTable.entrySet()) {
-        ServerRoutingInstance serverRoutingInstance =
-            entry.getKey().toServerRoutingInstance(TableType.OFFLINE, preferTls);
-        InstanceRequest instanceRequest = getInstanceRequest(requestId, offlineBrokerRequest, entry.getValue());
-        requestMap.put(serverRoutingInstance, instanceRequest);
-      }
-    }
-    if (realtimeBrokerRequest != null) {
-      assert realtimeRoutingTable != null;
-      for (Map.Entry<ServerInstance, Pair<List<String>, List<String>>> entry : realtimeRoutingTable.entrySet()) {
-        ServerRoutingInstance serverRoutingInstance =
-            entry.getKey().toServerRoutingInstance(TableType.REALTIME, preferTls);
-        InstanceRequest instanceRequest = getInstanceRequest(requestId, realtimeBrokerRequest, entry.getValue());
-        requestMap.put(serverRoutingInstance, instanceRequest);
-      }
-    }
+    Map<ServerRoutingInstance, InstanceRequest> requestMap = buildRequestMap(requestId, offlineBrokerRequest,
+        offlineRoutingTable, realtimeBrokerRequest, realtimeRoutingTable, preferTls);
 
     // Create the asynchronous query response with the request map
     AsyncQueryResponse asyncQueryResponse =
@@ -148,6 +131,43 @@ public class QueryRouter {
 
     return asyncQueryResponse;
   }
+
+  private Map<ServerRoutingInstance, InstanceRequest> buildRequestMap(long requestId,
+      @Nullable BrokerRequest offlineBrokerRequest,
+      @Nullable Map<ServerInstance, Pair<List<String>, List<String>>> offlineRoutingTable,
+      @Nullable BrokerRequest realtimeBrokerRequest,
+      @Nullable Map<ServerInstance, Pair<List<String>, List<String>>> realtimeRoutingTable,
+      boolean preferTls) {
+    Map<ServerRoutingInstance, InstanceRequest> requestMap = new HashMap<>();
+    if (offlineBrokerRequest != null) {
+      assert offlineRoutingTable != null;
+      for (Map.Entry<ServerInstance, Pair<List<String>, List<String>>> entry : offlineRoutingTable.entrySet()) {
+        ServerRoutingInstance serverRoutingInstance =
+            entry.getKey().toServerRoutingInstance(TableType.OFFLINE, preferTls);
+        InstanceRequest instanceRequest = getInstanceRequest(requestId, offlineBrokerRequest, entry.getValue());
+        requestMap.put(serverRoutingInstance, instanceRequest);
+      }
+    }
+    if (realtimeBrokerRequest != null) {
+      assert realtimeRoutingTable != null;
+      for (Map.Entry<ServerInstance, Pair<List<String>, List<String>>> entry : realtimeRoutingTable.entrySet()) {
+        ServerRoutingInstance serverRoutingInstance =
+            entry.getKey().toServerRoutingInstance(TableType.REALTIME, preferTls);
+        InstanceRequest instanceRequest = getInstanceRequest(requestId, realtimeBrokerRequest, entry.getValue());
+        requestMap.put(serverRoutingInstance, instanceRequest);
+      }
+    }
+    return requestMap;
+  }
+
+  private void markQueryFailed(long requestId, ServerRoutingInstance serverRoutingInstance,
+      AsyncQueryResponse asyncQueryResponse, Exception e) {
+    LOGGER.error("Caught exception while sending request {} to server: {}, marking query failed", requestId,
+        serverRoutingInstance, e);
+    asyncQueryResponse.markQueryFailed(serverRoutingInstance, e);
+  }
+
+//Refactoring end
 
   private void markQueryFailed(long requestId, ServerRoutingInstance serverRoutingInstance,
       AsyncQueryResponse asyncQueryResponse, Exception e) {

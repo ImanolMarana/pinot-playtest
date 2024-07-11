@@ -240,74 +240,112 @@ public class DistinctCountHLLPlusAggregationFunction extends BaseSingleInputAggr
     // Treat BYTES value as serialized HyperLogLogPlus
     DataType storedType = blockValSet.getValueType().getStoredType();
     if (storedType == DataType.BYTES) {
-      byte[][] bytesValues = blockValSet.getBytesValuesSV();
-      try {
-        for (int i = 0; i < length; i++) {
-          HyperLogLogPlus value = ObjectSerDeUtils.HYPER_LOG_LOG_PLUS_SER_DE.deserialize(bytesValues[i]);
-          for (int groupKey : groupKeysArray[i]) {
-            HyperLogLogPlus hyperLogLogPlus = groupByResultHolder.getResult(groupKey);
-            if (hyperLogLogPlus != null) {
-              hyperLogLogPlus.addAll(value);
-            } else {
-              // Create a new HyperLogLogPlus for the group
-              groupByResultHolder.setValueForKey(groupKey,
-                  ObjectSerDeUtils.HYPER_LOG_LOG_PLUS_SER_DE.deserialize(bytesValues[i]));
-            }
-          }
-        }
-      } catch (Exception e) {
-        throw new RuntimeException("Caught exception while merging HyperLogLogPlus", e);
-      }
+      aggregateGroupByMVBytes(length, groupKeysArray, groupByResultHolder, blockValSet);
       return;
     }
 
     // For dictionary-encoded expression, store dictionary ids into the bitmap
     Dictionary dictionary = blockValSet.getDictionary();
     if (dictionary != null) {
-      int[] dictIds = blockValSet.getDictionaryIdsSV();
-      for (int i = 0; i < length; i++) {
-        setDictIdForGroupKeys(groupByResultHolder, groupKeysArray[i], dictionary, dictIds[i]);
-      }
+      aggregateGroupByMVDictionaryEncoded(length, groupKeysArray, groupByResultHolder, blockValSet);
       return;
     }
 
     // For non-dictionary-encoded expression, store values into the HyperLogLogPlus
     switch (storedType) {
       case INT:
-        int[] intValues = blockValSet.getIntValuesSV();
-        for (int i = 0; i < length; i++) {
-          setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], intValues[i]);
-        }
+        aggregateGroupByMVInt(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case LONG:
-        long[] longValues = blockValSet.getLongValuesSV();
-        for (int i = 0; i < length; i++) {
-          setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], longValues[i]);
-        }
+        aggregateGroupByMVLong(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case FLOAT:
-        float[] floatValues = blockValSet.getFloatValuesSV();
-        for (int i = 0; i < length; i++) {
-          setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], floatValues[i]);
-        }
+        aggregateGroupByMVFloat(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case DOUBLE:
-        double[] doubleValues = blockValSet.getDoubleValuesSV();
-        for (int i = 0; i < length; i++) {
-          setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], doubleValues[i]);
-        }
+        aggregateGroupByMVDouble(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       case STRING:
-        String[] stringValues = blockValSet.getStringValuesSV();
-        for (int i = 0; i < length; i++) {
-          setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], stringValues[i]);
-        }
+        aggregateGroupByMVString(length, groupKeysArray, groupByResultHolder, blockValSet);
         break;
       default:
         throw new IllegalStateException(
             "Illegal data type for DISTINCT_COUNT_HLL_PLUS aggregation function: " + storedType);
     }
   }
+
+  private void aggregateGroupByMVBytes(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    byte[][] bytesValues = blockValSet.getBytesValuesSV();
+    try {
+      for (int i = 0; i < length; i++) {
+        HyperLogLogPlus value = ObjectSerDeUtils.HYPER_LOG_LOG_PLUS_SER_DE.deserialize(bytesValues[i]);
+        for (int groupKey : groupKeysArray[i]) {
+          HyperLogLogPlus hyperLogLogPlus = groupByResultHolder.getResult(groupKey);
+          if (hyperLogLogPlus != null) {
+            hyperLogLogPlus.addAll(value);
+          } else {
+            // Create a new HyperLogLogPlus for the group
+            groupByResultHolder.setValueForKey(groupKey,
+                ObjectSerDeUtils.HYPER_LOG_LOG_PLUS_SER_DE.deserialize(bytesValues[i]));
+          }
+        }
+      }
+    } catch (Exception e) {
+      throw new RuntimeException("Caught exception while merging HyperLogLogPlus", e);
+    }
+  }
+
+  private void aggregateGroupByMVDictionaryEncoded(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    int[] dictIds = blockValSet.getDictionaryIdsSV();
+    Dictionary dictionary = blockValSet.getDictionary();
+    for (int i = 0; i < length; i++) {
+      setDictIdForGroupKeys(groupByResultHolder, groupKeysArray[i], dictionary, dictIds[i]);
+    }
+  }
+
+  private void aggregateGroupByMVInt(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    int[] intValues = blockValSet.getIntValuesSV();
+    for (int i = 0; i < length; i++) {
+      setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], intValues[i]);
+    }
+  }
+
+  private void aggregateGroupByMVLong(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    long[] longValues = blockValSet.getLongValuesSV();
+    for (int i = 0; i < length; i++) {
+      setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], longValues[i]);
+    }
+  }
+
+  private void aggregateGroupByMVFloat(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    float[] floatValues = blockValSet.getFloatValuesSV();
+    for (int i = 0; i < length; i++) {
+      setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], floatValues[i]);
+    }
+  }
+
+  private void aggregateGroupByMVDouble(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    double[] doubleValues = blockValSet.getDoubleValuesSV();
+    for (int i = 0; i < length; i++) {
+      setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], doubleValues[i]);
+    }
+  }
+
+  private void aggregateGroupByMVString(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, BlockValSet blockValSet) {
+    String[] stringValues = blockValSet.getStringValuesSV();
+    for (int i = 0; i < length; i++) {
+      setValueForGroupKeys(groupByResultHolder, groupKeysArray[i], stringValues[i]);
+    }
+  }
+
+//Refactoring end
 
   @Override
   public HyperLogLogPlus extractAggregationResult(AggregationResultHolder aggregationResultHolder) {

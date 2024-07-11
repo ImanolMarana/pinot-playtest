@@ -52,47 +52,54 @@ public class ForwardIndexCreatorFactory {
     int numTotalDocs = context.getTotalDocs();
 
     if (context.hasDictionary()) {
-      // Dictionary enabled columns
-      int cardinality = context.getCardinality();
-      if (fieldSpec.isSingleValueField()) {
-        if (context.isSorted()) {
-          return new SingleValueSortedForwardIndexCreator(indexDir, columnName, cardinality);
-        } else {
-          return new SingleValueUnsortedForwardIndexCreator(indexDir, columnName, cardinality, numTotalDocs);
-        }
-      } else {
-        if (indexConfig.getDictIdCompressionType() == DictIdCompressionType.MV_ENTRY_DICT) {
-          return new MultiValueEntryDictForwardIndexCreator(indexDir, columnName, cardinality, numTotalDocs);
-        } else {
-          return new MultiValueUnsortedForwardIndexCreator(indexDir, columnName, cardinality, numTotalDocs,
-              context.getTotalNumberOfEntries());
-        }
-      }
+      return createDictionaryBasedIndexCreator(context, indexConfig, indexDir, fieldSpec, columnName, numTotalDocs);
     } else {
-      // Dictionary disabled columns
-      DataType storedType = fieldSpec.getDataType().getStoredType();
-      if (indexConfig.getCompressionCodec() == FieldConfig.CompressionCodec.CLP) {
-        return new CLPForwardIndexCreatorV1(indexDir, columnName, numTotalDocs, context.getColumnStatistics());
-      }
-      ChunkCompressionType chunkCompressionType = indexConfig.getChunkCompressionType();
-      if (chunkCompressionType == null) {
-        chunkCompressionType = ForwardIndexType.getDefaultCompressionType(fieldSpec.getFieldType());
-      }
-      boolean deriveNumDocsPerChunk = indexConfig.isDeriveNumDocsPerChunk();
-      int writerVersion = indexConfig.getRawIndexWriterVersion();
-      int targetMaxChunkSize = indexConfig.getTargetMaxChunkSizeBytes();
-      int targetDocsPerChunk = indexConfig.getTargetDocsPerChunk();
-      if (fieldSpec.isSingleValueField()) {
-        return getRawIndexCreatorForSVColumn(indexDir, chunkCompressionType, columnName, storedType, numTotalDocs,
-            context.getLengthOfLongestEntry(), deriveNumDocsPerChunk, writerVersion, targetMaxChunkSize,
-            targetDocsPerChunk);
-      } else {
-        return getRawIndexCreatorForMVColumn(indexDir, chunkCompressionType, columnName, storedType, numTotalDocs,
-            context.getMaxNumberOfMultiValueElements(), deriveNumDocsPerChunk, writerVersion,
-            context.getMaxRowLengthInBytes(), targetMaxChunkSize, targetDocsPerChunk);
-      }
+      return createRawIndexCreator(context, indexConfig, indexDir, fieldSpec, columnName, numTotalDocs);
     }
   }
+
+  private static ForwardIndexCreator createDictionaryBasedIndexCreator(IndexCreationContext context,
+      ForwardIndexConfig indexConfig, File indexDir, FieldSpec fieldSpec, String columnName, int numTotalDocs) {
+    int cardinality = context.getCardinality();
+    if (fieldSpec.isSingleValueField()) {
+      return context.isSorted() ? new SingleValueSortedForwardIndexCreator(indexDir, columnName, cardinality)
+          : new SingleValueUnsortedForwardIndexCreator(indexDir, columnName, cardinality, numTotalDocs);
+    } else {
+      return (indexConfig.getDictIdCompressionType() == DictIdCompressionType.MV_ENTRY_DICT)
+          ? new MultiValueEntryDictForwardIndexCreator(indexDir, columnName, cardinality, numTotalDocs)
+          : new MultiValueUnsortedForwardIndexCreator(indexDir, columnName, cardinality, numTotalDocs,
+              context.getTotalNumberOfEntries());
+    }
+  }
+
+  private static ForwardIndexCreator createRawIndexCreator(IndexCreationContext context,
+      ForwardIndexConfig indexConfig, File indexDir, FieldSpec fieldSpec, String columnName, int numTotalDocs)
+      throws IOException {
+    DataType storedType = fieldSpec.getDataType().getStoredType();
+    if (indexConfig.getCompressionCodec() == FieldConfig.CompressionCodec.CLP) {
+      return new CLPForwardIndexCreatorV1(indexDir, columnName, numTotalDocs, context.getColumnStatistics());
+    }
+    ChunkCompressionType chunkCompressionType = indexConfig.getChunkCompressionType();
+    if (chunkCompressionType == null) {
+      chunkCompressionType = ForwardIndexType.getDefaultCompressionType(fieldSpec.getFieldType());
+    }
+    boolean deriveNumDocsPerChunk = indexConfig.isDeriveNumDocsPerChunk();
+    int writerVersion = indexConfig.getRawIndexWriterVersion();
+    int targetMaxChunkSize = indexConfig.getTargetMaxChunkSizeBytes();
+    int targetDocsPerChunk = indexConfig.getTargetDocsPerChunk();
+    if (fieldSpec.isSingleValueField()) {
+      return getRawIndexCreatorForSVColumn(indexDir, chunkCompressionType, columnName, storedType, numTotalDocs,
+          context.getLengthOfLongestEntry(), deriveNumDocsPerChunk, writerVersion, targetMaxChunkSize,
+          targetDocsPerChunk);
+    } else {
+      return getRawIndexCreatorForMVColumn(indexDir, chunkCompressionType, columnName, storedType, numTotalDocs,
+          context.getMaxNumberOfMultiValueElements(), deriveNumDocsPerChunk, writerVersion,
+          context.getMaxRowLengthInBytes(), targetMaxChunkSize, targetDocsPerChunk);
+    }
+  }
+
+
+//Refactoring end
 
   /**
    * Helper method to build the raw index creator for the column.

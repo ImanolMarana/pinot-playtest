@@ -59,39 +59,57 @@ public interface CombinedInvertedIndexCreator
   default void add(@Nonnull Object[] values, @Nullable int[] dictIds) {
     if (dictIds != null) {
       add(dictIds, dictIds.length);
-    } else {
-      switch (getDataType()) {
-        case INT:
-          int[] intValues = new int[values.length];
-          for (int i = 0; i < values.length; i++) {
-            intValues[i] = (Integer) values[i];
-          }
-          add(intValues, values.length);
-          break;
-        case LONG:
-          long[] longValues = new long[values.length];
-          for (int i = 0; i < values.length; i++) {
-            longValues[i] = (Long) values[i];
-          }
-          add(longValues, values.length);
-          break;
-        case FLOAT:
-          float[] floatValues = new float[values.length];
-          for (int i = 0; i < values.length; i++) {
-            floatValues[i] = (Float) values[i];
-          }
-          add(floatValues, values.length);
-          break;
-        case DOUBLE:
-          double[] doubleValues = new double[values.length];
-          for (int i = 0; i < values.length; i++) {
-            doubleValues[i] = (Double) values[i];
-          }
-          add(doubleValues, values.length);
-          break;
-        default:
-          throw new RuntimeException("Unsupported data type " + getDataType() + " for range index");
-      }
+      return;
+    }
+
+    switch (getDataType()) {
+      case INT:
+        add(toIntArray(values), values.length);
+        break;
+      case LONG:
+        add(toLongArray(values), values.length);
+        break;
+      case FLOAT:
+        add(toFloatArray(values), values.length);
+        break;
+      case DOUBLE:
+        add(toDoubleArray(values), values.length);
+        break;
+      default:
+        throw new RuntimeException("Unsupported data type " + getDataType() + " for range index");
     }
   }
-}
+
+  private int[] toIntArray(@Nonnull Object[] values) {
+    int[] intValues = new int[values.length];
+    for (int i = 0; i < values.length; i++) {
+      intValues[i] = (Integer) values[i];
+    }
+    return intValues;
+  }
+
+  private long[] toLongArray(@Nonnull Object[] values) {
+    long[] longValues = new long[values.length];
+    for (int i = 0; i < values.length; i++) {
+      longValues[i] = (Long) values[i];
+    }
+    return longValues;
+  }
+
+  private float[] toFloatArray(@Nonnull Object[] values) {
+    float[] floatValues = new float[values.length];
+    for (int i = 0; i < values.length; i++) {
+      floatValues[i] = (Float) values[i];
+    }
+    return floatValues;
+  }
+
+  private double[] toDoubleArray(@Nonnull Object[] values) {
+    double[] doubleValues = new double[values.length];
+    for (int i = 0; i < values.length; i++) {
+      doubleValues[i] = (Double) values[i];
+    }
+    return doubleValues;
+  }
+
+//Refactoring end

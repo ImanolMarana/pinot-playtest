@@ -77,77 +77,9 @@ public class CSVRecordReader implements RecordReader {
     _dataFile = dataFile;
     CSVRecordReaderConfig config = (CSVRecordReaderConfig) recordReaderConfig;
     Character multiValueDelimiter = null;
-    if (config == null) {
-      _format = CSVFormat.DEFAULT.builder().setDelimiter(CSVRecordReaderConfig.DEFAULT_DELIMITER).setHeader().build();
-      multiValueDelimiter = CSVRecordReaderConfig.DEFAULT_MULTI_VALUE_DELIMITER;
-    } else {
-      CSVFormat format;
-      String formatString = config.getFileFormat();
-      if (formatString == null) {
-        format = CSVFormat.DEFAULT;
-      } else {
-        switch (formatString.toUpperCase()) {
-          case "EXCEL":
-            format = CSVFormat.EXCEL;
-            break;
-          case "MYSQL":
-            format = CSVFormat.MYSQL;
-            break;
-          case "RFC4180":
-            format = CSVFormat.RFC4180;
-            break;
-          case "TDF":
-            format = CSVFormat.TDF;
-            break;
-          default:
-            format = CSVFormat.DEFAULT;
-            break;
-        }
-      }
-      char delimiter = config.getDelimiter();
-      format = format.builder().setDelimiter(delimiter).build();
 
-      if (config.isSkipUnParseableLines()) {
-        _useLineIterator = true;
-      }
-
-      _isHeaderProvided = config.getHeader() != null;
-      _skipHeaderRecord = config.isSkipHeader();
-      _format = format.builder()
-          .setHeader()
-          .setSkipHeaderRecord(config.isSkipHeader())
-          .setCommentMarker(config.getCommentMarker())
-          .setEscape(config.getEscapeCharacter())
-          .setIgnoreEmptyLines(config.isIgnoreEmptyLines())
-          .setIgnoreSurroundingSpaces(config.isIgnoreSurroundingSpaces())
-          .setQuote(config.getQuoteCharacter())
-          .build();
-
-      if (config.getQuoteMode() != null) {
-        _format = _format.builder().setQuoteMode(QuoteMode.valueOf(config.getQuoteMode())).build();
-      }
-
-      if (config.getRecordSeparator() != null) {
-        _format = _format.builder().setRecordSeparator(config.getRecordSeparator()).build();
-      }
-
-      String nullString = config.getNullStringValue();
-      if (nullString != null) {
-        _format = _format.builder().setNullString(nullString).build();
-      }
-
-      if (_isHeaderProvided) {
-        _headerMap = parseLineAsHeader(config.getHeader());
-        _format = _format.builder().setHeader(_headerMap.keySet().toArray(new String[0])).build();
-        if (!_useLineIterator) {
-          validateHeaderForDelimiter(delimiter, config.getHeader(), _format);
-        }
-      }
-
-      if (config.isMultiValueDelimiterEnabled()) {
-        multiValueDelimiter = config.getMultiValueDelimiter();
-      }
-    }
+    _format = configureCSVFormat(config);
+    multiValueDelimiter = getMultiValueDelimiter(config, multiValueDelimiter);
     _recordExtractor = new CSVRecordExtractor();
 
     init();
@@ -157,6 +89,98 @@ public class CSVRecordReader implements RecordReader {
     recordExtractorConfig.setColumnNames(_headerMap.keySet());
     _recordExtractor.init(fieldsToRead, recordExtractorConfig);
   }
+
+  private Character getMultiValueDelimiter(CSVRecordReaderConfig config, Character multiValueDelimiter) {
+    if (config == null) {
+      multiValueDelimiter = CSVRecordReaderConfig.DEFAULT_MULTI_VALUE_DELIMITER;
+    } else if (config.isMultiValueDelimiterEnabled()) {
+      multiValueDelimiter = config.getMultiValueDelimiter();
+    }
+    return multiValueDelimiter;
+  }
+
+  private CSVFormat configureCSVFormat(CSVRecordReaderConfig config) throws IOException {
+    CSVFormat format;
+    if (config == null) {
+      format = CSVFormat.DEFAULT.builder().setDelimiter(CSVRecordReaderConfig.DEFAULT_DELIMITER).setHeader().build();
+    } else {
+      format = getCSVFormat(config);
+      char delimiter = config.getDelimiter();
+      format = format.builder().setDelimiter(delimiter).build();
+
+      if (config.isSkipUnParseableLines()) {
+        _useLineIterator = true;
+      }
+
+      _isHeaderProvided = config.getHeader() != null;
+      _skipHeaderRecord = config.isSkipHeader();
+      format = format.builder()
+          .setHeader()
+          .setSkipHeaderRecord(config.isSkipHeader())
+          .setCommentMarker(config.getCommentMarker())
+          .setEscape(config.getEscapeCharacter())
+          .setIgnoreEmptyLines(config.isIgnoreEmptyLines())
+          .setIgnoreSurroundingSpaces(config.isIgnoreSurroundingSpaces())
+          .setQuote(config.getQuoteCharacter())
+          .build();
+
+      format = applyOptionalFormatSettings(config, format);
+
+      if (_isHeaderProvided) {
+        _headerMap = parseLineAsHeader(config.getHeader());
+        format = format.builder().setHeader(_headerMap.keySet().toArray(new String[0])).build();
+        if (!_useLineIterator) {
+          validateHeaderForDelimiter(delimiter, config.getHeader(), format);
+        }
+      }
+    }
+    return format;
+  }
+
+  private CSVFormat applyOptionalFormatSettings(CSVRecordReaderConfig config, CSVFormat format) {
+    if (config.getQuoteMode() != null) {
+      format = format.builder().setQuoteMode(QuoteMode.valueOf(config.getQuoteMode())).build();
+    }
+
+    if (config.getRecordSeparator() != null) {
+      format = format.builder().setRecordSeparator(config.getRecordSeparator()).build();
+    }
+
+    String nullString = config.getNullStringValue();
+    if (nullString != null) {
+      format = format.builder().setNullString(nullString).build();
+    }
+    return format;
+  }
+
+  private CSVFormat getCSVFormat(CSVRecordReaderConfig config) {
+    CSVFormat format;
+    String formatString = config.getFileFormat();
+    if (formatString == null) {
+      format = CSVFormat.DEFAULT;
+    } else {
+      switch (formatString.toUpperCase()) {
+        case "EXCEL":
+          format = CSVFormat.EXCEL;
+          break;
+        case "MYSQL":
+          format = CSVFormat.MYSQL;
+          break;
+        case "RFC4180":
+          format = CSVFormat.RFC4180;
+          break;
+        case "TDF":
+          format = CSVFormat.TDF;
+          break;
+        default:
+          format = CSVFormat.DEFAULT;
+          break;
+      }
+    }
+    return format;
+  }
+
+//Refactoring end
 
   private void validateHeaderForDelimiter(char delimiter, String csvHeader, CSVFormat format)
       throws IOException {

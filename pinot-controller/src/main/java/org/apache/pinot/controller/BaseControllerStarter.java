@@ -476,6 +476,37 @@ public abstract class BaseControllerStarter implements ServiceStartable {
         .registerMessageHandlerFactory(Message.MessageType.USER_DEFINE_MSG.toString(),
             new ControllerUserDefinedMessageHandlerFactory(_periodicTaskScheduler));
 
+    startAdminApplication();
+
+    // One time job to fix schema name in all tables
+    // This method can be removed after the next major release.
+    fixSchemaNameInTableConfig();
+
+    _controllerMetrics.addCallbackGauge("dataDir.exists", () -> new File(_config.getDataDir()).exists() ? 1L : 0L);
+    _controllerMetrics.addCallbackGauge("dataDir.fileOpLatencyMs", () -> {
+      File dataDir = new File(_config.getDataDir());
+      if (dataDir.exists()) {
+        try {
+          long startTime = System.currentTimeMillis();
+          File testFile = new File(dataDir, _config.getControllerHost());
+          try (OutputStream outputStream = new FileOutputStream(testFile, false)) {
+            outputStream.write(Longs.toByteArray(System.currentTimeMillis()));
+          }
+          FileUtils.deleteQuietly(testFile);
+          return System.currentTimeMillis() - startTime;
+        } catch (IOException e) {
+          LOGGER.warn("Caught exception while checking the data directory operation latency", e);
+          return DATA_DIRECTORY_EXCEPTION_VALUE;
+        }
+      } else {
+        return DATA_DIRECTORY_MISSING_VALUE;
+      }
+    });
+
+    _serviceStatusCallbackList.add(generateServiceStatusCallback(_helixParticipantManager));
+  }
+
+  private void startAdminApplication() {
     String accessControlFactoryClass = _config.getAccessControlFactoryClass();
     LOGGER.info("Use class: {} as the AccessControlFactory", accessControlFactoryClass);
     final AccessControlFactory accessControlFactory;
@@ -543,34 +574,8 @@ public abstract class BaseControllerStarter implements ServiceStartable {
           + "following HLC tables before proceeding: {}\n", existingHlcTables);
       throw new RuntimeException("Unable to start controller due to existing HLC tables!");
     }
-
-    // One time job to fix schema name in all tables
-    // This method can be removed after the next major release.
-    fixSchemaNameInTableConfig();
-
-    _controllerMetrics.addCallbackGauge("dataDir.exists", () -> new File(_config.getDataDir()).exists() ? 1L : 0L);
-    _controllerMetrics.addCallbackGauge("dataDir.fileOpLatencyMs", () -> {
-      File dataDir = new File(_config.getDataDir());
-      if (dataDir.exists()) {
-        try {
-          long startTime = System.currentTimeMillis();
-          File testFile = new File(dataDir, _config.getControllerHost());
-          try (OutputStream outputStream = new FileOutputStream(testFile, false)) {
-            outputStream.write(Longs.toByteArray(System.currentTimeMillis()));
-          }
-          FileUtils.deleteQuietly(testFile);
-          return System.currentTimeMillis() - startTime;
-        } catch (IOException e) {
-          LOGGER.warn("Caught exception while checking the data directory operation latency", e);
-          return DATA_DIRECTORY_EXCEPTION_VALUE;
-        }
-      } else {
-        return DATA_DIRECTORY_MISSING_VALUE;
-      }
-    });
-
-    _serviceStatusCallbackList.add(generateServiceStatusCallback(_helixParticipantManager));
   }
+//Refactoring end
 
   /**
    * This method is used to fix table/schema names.

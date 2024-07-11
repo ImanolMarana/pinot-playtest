@@ -45,23 +45,22 @@ public abstract class RangeWindowFunction extends WindowFunction {
       if (inputRef < 0) {
         continue;
       }
-      Object leftValue = leftRow[inputRef];
-      Object rightValue = rightRow[inputRef];
-      if (leftValue == null) {
-        if (rightValue != null) {
-          return -1;
-        }
-      } else {
-        if (rightValue == null) {
-          return 1;
-        } else {
-          int result = ((Comparable) leftValue).compareTo(rightValue);
-          if (result != 0) {
-            return result;
-          }
-        }
+      int result = compareValues(leftRow[inputRef], rightRow[inputRef]);
+      if (result != 0) {
+        return result;
       }
     }
     return 0;
   }
+
+  private int compareValues(Object leftValue, Object rightValue) {
+    if (leftValue == null) {
+      return (rightValue != null) ? -1 : 0;
+    } else if (rightValue == null) {
+      return 1;
+    } else {
+      return ((Comparable) leftValue).compareTo(rightValue);
+    }
+  }
+//Refactoring end
 }

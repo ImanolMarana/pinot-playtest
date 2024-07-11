@@ -374,22 +374,13 @@ public class JsonUtils {
   private static List<Map<String, String>> flatten(JsonNode node, JsonIndexConfig jsonIndexConfig, int level,
       String path, boolean includePathMatched) {
     // Null
-    if (node.isNull()) {
-      return Collections.emptyList();
-    }
-
-    if (node.isMissingNode()) {
+    if (node.isNull() || node.isMissingNode()) {
       return Collections.emptyList();
     }
 
     // Value
     if (node.isValueNode()) {
-      String valueAsText = node.asText();
-      int maxValueLength = jsonIndexConfig.getMaxValueLength();
-      if (0 < maxValueLength && maxValueLength < valueAsText.length()) {
-        valueAsText = SKIPPED_VALUE_REPLACEMENT;
-      }
-      return Collections.singletonList(Collections.singletonMap(VALUE_KEY, valueAsText));
+      return handleValueNode(node, jsonIndexConfig);
     }
 
     Preconditions.checkArgument(node.isArray() || node.isObject(), "Unexpected node type: %s", node.getNodeType());
@@ -402,40 +393,58 @@ public class JsonUtils {
 
     // Array
     if (node.isArray()) {
-      if (jsonIndexConfig.isExcludeArray()) {
-        return Collections.emptyList();
-      }
-      int numChildren = node.size();
-      if (numChildren == 0) {
-        return Collections.emptyList();
-      }
-      String childPath = path + ARRAY_PATH;
-      IncludeResult includeResult =
-          includePathMatched ? IncludeResult.MATCH : shouldInclude(jsonIndexConfig, childPath);
-      if (!includeResult._shouldInclude) {
-        return Collections.emptyList();
-      }
-      List<Map<String, String>> results = new ArrayList<>(numChildren);
-      for (int i = 0; i < numChildren; i++) {
-        JsonNode childNode = node.get(i);
-        String arrayIndexValue = Integer.toString(i);
-        List<Map<String, String>> childResults =
-            flatten(childNode, jsonIndexConfig, level + 1, childPath, includeResult._includePathMatched);
-        for (Map<String, String> childResult : childResults) {
-          Map<String, String> result = new TreeMap<>();
-          for (Map.Entry<String, String> entry : childResult.entrySet()) {
-            result.put(KEY_SEPARATOR + entry.getKey(), entry.getValue());
-          }
-          result.put(ARRAY_INDEX_KEY, arrayIndexValue);
-          results.add(result);
-        }
-      }
-      return results;
+      return handleArrayNode(node, jsonIndexConfig, level, path, includePathMatched);
     }
 
     // Object
     assert node.isObject();
+    return handleObjectNode(node, jsonIndexConfig, level, path, includePathMatched);
+  }
 
+  private static List<Map<String, String>> handleValueNode(JsonNode node, JsonIndexConfig jsonIndexConfig) {
+    String valueAsText = node.asText();
+    int maxValueLength = jsonIndexConfig.getMaxValueLength();
+    if (0 < maxValueLength && maxValueLength < valueAsText.length()) {
+      valueAsText = SKIPPED_VALUE_REPLACEMENT;
+    }
+    return Collections.singletonList(Collections.singletonMap(VALUE_KEY, valueAsText));
+  }
+
+  private static List<Map<String, String>> handleArrayNode(JsonNode node, JsonIndexConfig jsonIndexConfig, int level,
+      String path, boolean includePathMatched) {
+    if (jsonIndexConfig.isExcludeArray()) {
+      return Collections.emptyList();
+    }
+    int numChildren = node.size();
+    if (numChildren == 0) {
+      return Collections.emptyList();
+    }
+    String childPath = path + ARRAY_PATH;
+    IncludeResult includeResult =
+        includePathMatched ? IncludeResult.MATCH : shouldInclude(jsonIndexConfig, childPath);
+    if (!includeResult._shouldInclude) {
+      return Collections.emptyList();
+    }
+    List<Map<String, String>> results = new ArrayList<>(numChildren);
+    for (int i = 0; i < numChildren; i++) {
+      JsonNode childNode = node.get(i);
+      String arrayIndexValue = Integer.toString(i);
+      List<Map<String, String>> childResults =
+          flatten(childNode, jsonIndexConfig, level + 1, childPath, includeResult._includePathMatched);
+      for (Map<String, String> childResult : childResults) {
+        Map<String, String> result = new TreeMap<>();
+        for (Map.Entry<String, String> entry : childResult.entrySet()) {
+          result.put(KEY_SEPARATOR + entry.getKey(), entry.getValue());
+        }
+        result.put(ARRAY_INDEX_KEY, arrayIndexValue);
+        results.add(result);
+      }
+    }
+    return results;
+  }
+
+  private static List<Map<String, String>> handleObjectNode(JsonNode node, JsonIndexConfig jsonIndexConfig, int level,
+      String path, boolean includePathMatched) {
     // Merge all non-nested results into a single map
     Map<String, String> nonNestedResult = new TreeMap<>();
     // Put all nested results (from array) into a list to be processed later
@@ -487,7 +496,11 @@ public class JsonUtils {
       nestedResultsList.add(prefixedResults);
     }
 
-    // Merge non-nested results and nested results
+    return mergeResults(nonNestedResult, nestedResultsList, jsonIndexConfig);
+  }
+
+  private static List<Map<String, String>> mergeResults(Map<String, String> nonNestedResult,
+      List<List<Map<String, String>>> nestedResultsList, JsonIndexConfig jsonIndexConfig) {
     int nestedResultsListSize = nestedResultsList.size();
     if (nestedResultsListSize == 0) {
       if (nonNestedResult.isEmpty()) {
@@ -503,89 +516,44 @@ public class JsonUtils {
       }
       return nestedResults;
     }
-    // Multiple child nodes with multiple records
     if (jsonIndexConfig.isDisableCrossArrayUnnest()) {
-      // Add each array individually
-      int numResults = 0;
-      for (List<Map<String, String>> nestedResults : nestedResultsList) {
-        numResults += nestedResults.size();
-      }
-      List<Map<String, String>> results = new ArrayList<>(numResults);
-      for (List<Map<String, String>> nestedResults : nestedResultsList) {
-        for (Map<String, String> nestedResult : nestedResults) {
-          nestedResult.putAll(nonNestedResult);
-          results.add(nestedResult);
-        }
-      }
-      return results;
+      return handleSingleArrayUnnest(nonNestedResult, nestedResultsList);
     } else {
-      // Calculate each combination of them as a new record
-      long numResults = 1;
-      for (List<Map<String, String>> nestedResults : nestedResultsList) {
-        numResults *= nestedResults.size();
-        Preconditions.checkState(numResults < MAX_COMBINATIONS, "Got too many combinations");
-      }
-      List<Map<String, String>> results = new ArrayList<>((int) numResults);
-      unnestResults(nestedResultsList.get(0), nestedResultsList, 1, nonNestedResult, results);
-      return results;
+      return handleCrossArrayUnnest(nonNestedResult, nestedResultsList);
     }
   }
 
-  private static IncludeResult shouldInclude(JsonIndexConfig jsonIndexConfig, String path) {
-    Set<String> includePaths = jsonIndexConfig.getIncludePaths();
-    if (includePaths != null) {
-      if (includePaths.contains(path)) {
-        return IncludeResult.MATCH;
-      }
-      for (String includePath : includePaths) {
-        if (includePath.startsWith(path)) {
-          return IncludeResult.POTENTIAL_MATCH;
-        }
-      }
-      return IncludeResult.NOT_MATCH;
+  private static List<Map<String, String>> handleSingleArrayUnnest(Map<String, String> nonNestedResult,
+      List<List<Map<String, String>>> nestedResultsList) {
+    // Add each array individually
+    int numResults = 0;
+    for (List<Map<String, String>> nestedResults : nestedResultsList) {
+      numResults += nestedResults.size();
     }
-    Set<String> excludePaths = jsonIndexConfig.getExcludePaths();
-    if (excludePaths != null && excludePaths.contains(path)) {
-      return IncludeResult.NOT_MATCH;
+    List<Map<String, String>> results = new ArrayList<>(numResults);
+    for (List<Map<String, String>> nestedResults : nestedResultsList) {
+      for (Map<String, String> nestedResult : nestedResults) {
+        nestedResult.putAll(nonNestedResult);
+        results.add(nestedResult);
+      }
     }
-    return IncludeResult.POTENTIAL_MATCH;
+    return results;
   }
 
-  private enum IncludeResult {
-    MATCH(true, true), POTENTIAL_MATCH(true, false), NOT_MATCH(false, false);
-
-    final boolean _shouldInclude;
-    final boolean _includePathMatched;
-
-    IncludeResult(boolean shouldInclude, boolean includePathMatched) {
-      _shouldInclude = shouldInclude;
-      _includePathMatched = includePathMatched;
+  private static List<Map<String, String>> handleCrossArrayUnnest(Map<String, String> nonNestedResult,
+      List<List<Map<String, String>>> nestedResultsList) {
+    // Calculate each combination of them as a new record
+    long numResults = 1;
+    for (List<Map<String, String>> nestedResults : nestedResultsList) {
+      numResults *= nestedResults.size();
+      Preconditions.checkState(numResults < MAX_COMBINATIONS, "Got too many combinations");
     }
+    List<Map<String, String>> results = new ArrayList<>((int) numResults);
+    unnestResults(nestedResultsList.get(0), nestedResultsList, 1, nonNestedResult, results);
+    return results;
   }
 
-  private static void unnestResults(List<Map<String, String>> currentResults,
-      List<List<Map<String, String>>> nestedResultsList, int index, Map<String, String> nonNestedResult,
-      List<Map<String, String>> outputResults) {
-    int nestedResultsListSize = nestedResultsList.size();
-    if (nestedResultsListSize == index) {
-      for (Map<String, String> currentResult : currentResults) {
-        currentResult.putAll(nonNestedResult);
-        outputResults.add(currentResult);
-      }
-    } else {
-      List<Map<String, String>> nestedResults = nestedResultsList.get(index);
-      int numCurrentResults = currentResults.size();
-      int numNestedResults = nestedResults.size();
-      List<Map<String, String>> newCurrentResults = new ArrayList<>(numCurrentResults * numNestedResults);
-      for (Map<String, String> currentResult : currentResults) {
-        for (Map<String, String> nestedResult : nestedResults) {
-          Map<String, String> newCurrentResult = new TreeMap<>(currentResult);
-          newCurrentResult.putAll(nestedResult);
-          newCurrentResults.add(newCurrentResult);
-        }
-      }
-      unnestResults(newCurrentResults, nestedResultsList, index + 1, nonNestedResult, outputResults);
-    }
+//Refactoring end
   }
 
   public static Schema getPinotSchemaFromJsonFile(File jsonFile,

@@ -373,24 +373,40 @@ public class RowBasedBlockValSet implements BlockValSet {
       return values;
     }
     if (_nullBitmap == null) {
-      if (_storedType == DataType.BYTES) {
-        for (int i = 0; i < numRows; i++) {
-          values[i] = ((ByteArray) _rows.get(i)[_colId]).getBytes();
-        }
-      } else {
-        throw new IllegalStateException("Cannot read bytes values from data type: " + _dataType);
+      return getBytesValuesSVWithoutNulls();
+    } else {
+      return getBytesValuesSVWithNulls();
+    }
+  }
+  
+  private byte[][] getBytesValuesSVWithoutNulls() {
+    int numRows = _rows.size();
+    byte[][] values = new byte[numRows][];
+    if (_storedType == DataType.BYTES) {
+      for (int i = 0; i < numRows; i++) {
+        values[i] = ((ByteArray) _rows.get(i)[_colId]).getBytes();
       }
     } else {
-      if (_storedType == DataType.BYTES) {
-        for (int i = 0; i < numRows; i++) {
-          ByteArray value = (ByteArray) _rows.get(i)[_colId];
-          values[i] = value != null ? value.getBytes() : NullValuePlaceHolder.BYTES;
-        }
-      } else {
-        throw new IllegalStateException("Cannot read bytes values from data type: " + _dataType);
-      }
+      throw new IllegalStateException("Cannot read bytes values from data type: " + _dataType);
     }
     return values;
+  }
+
+  private byte[][] getBytesValuesSVWithNulls() {
+    int numRows = _rows.size();
+    byte[][] values = new byte[numRows][];
+    if (_storedType == DataType.BYTES) {
+      for (int i = 0; i < numRows; i++) {
+        ByteArray value = (ByteArray) _rows.get(i)[_colId];
+        values[i] = value != null ? value.getBytes() : NullValuePlaceHolder.BYTES;
+      }
+    } else {
+      throw new IllegalStateException("Cannot read bytes values from data type: " + _dataType);
+    }
+    return values;
+  }
+
+//Refactoring end
   }
 
   @Override

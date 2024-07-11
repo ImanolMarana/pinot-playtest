@@ -113,68 +113,27 @@ public class SegmentMetadataFetcher {
    */
   private static Map<String, String> getColumnIndexes(DataSource dataSource) {
     Map<String, String> indexStatus = new LinkedHashMap<>();
-    if (Objects.isNull(dataSource.getBloomFilter())) {
-      indexStatus.put(BLOOM_FILTER, INDEX_NOT_AVAILABLE);
-    } else {
-      indexStatus.put(BLOOM_FILTER, INDEX_AVAILABLE);
-    }
-
-    if (Objects.isNull(dataSource.getDictionary())) {
-      indexStatus.put(DICTIONARY, INDEX_NOT_AVAILABLE);
-    } else {
-      indexStatus.put(DICTIONARY, INDEX_AVAILABLE);
-    }
-
-    if (Objects.isNull(dataSource.getForwardIndex())) {
-      indexStatus.put(FORWARD_INDEX, INDEX_NOT_AVAILABLE);
-    } else {
-      indexStatus.put(FORWARD_INDEX, INDEX_AVAILABLE);
-    }
-
-    if (Objects.isNull(dataSource.getInvertedIndex())) {
-      indexStatus.put(INVERTED_INDEX, INDEX_NOT_AVAILABLE);
-    } else {
-      indexStatus.put(INVERTED_INDEX, INDEX_AVAILABLE);
-    }
-
-    if (Objects.isNull(dataSource.getNullValueVector())) {
-      indexStatus.put(NULL_VALUE_VECTOR_READER, INDEX_NOT_AVAILABLE);
-    } else {
-      indexStatus.put(NULL_VALUE_VECTOR_READER, INDEX_AVAILABLE);
-    }
-
-    if (Objects.isNull(dataSource.getRangeIndex())) {
-      indexStatus.put(RANGE_INDEX, INDEX_NOT_AVAILABLE);
-    } else {
-      indexStatus.put(RANGE_INDEX, INDEX_AVAILABLE);
-    }
-
-    if (Objects.isNull(dataSource.getJsonIndex())) {
-      indexStatus.put(JSON_INDEX, INDEX_NOT_AVAILABLE);
-    } else {
-      indexStatus.put(JSON_INDEX, INDEX_AVAILABLE);
-    }
-
-    if (Objects.isNull(dataSource.getH3Index())) {
-      indexStatus.put(H3_INDEX, INDEX_NOT_AVAILABLE);
-    } else {
-      indexStatus.put(H3_INDEX, INDEX_AVAILABLE);
-    }
-
-    if (Objects.isNull(dataSource.getFSTIndex())) {
-      indexStatus.put(FST_INDEX, INDEX_NOT_AVAILABLE);
-    } else {
-      indexStatus.put(FST_INDEX, INDEX_AVAILABLE);
-    }
-
-    if (Objects.isNull(dataSource.getTextIndex())) {
-      indexStatus.put(TEXT_INDEX, INDEX_NOT_AVAILABLE);
-    } else {
-      indexStatus.put(TEXT_INDEX, INDEX_AVAILABLE);
-    }
-
+    populateIndexStatus(dataSource, indexStatus);
     return indexStatus;
   }
+
+  private static void populateIndexStatus(DataSource dataSource, Map<String, String> indexStatus) {
+    indexStatus.put(BLOOM_FILTER, getIndexAvailability(dataSource.getBloomFilter()));
+    indexStatus.put(DICTIONARY, getIndexAvailability(dataSource.getDictionary()));
+    indexStatus.put(FORWARD_INDEX, getIndexAvailability(dataSource.getForwardIndex()));
+    indexStatus.put(INVERTED_INDEX, getIndexAvailability(dataSource.getInvertedIndex()));
+    indexStatus.put(NULL_VALUE_VECTOR_READER, getIndexAvailability(dataSource.getNullValueVector()));
+    indexStatus.put(RANGE_INDEX, getIndexAvailability(dataSource.getRangeIndex()));
+    indexStatus.put(JSON_INDEX, getIndexAvailability(dataSource.getJsonIndex()));
+    indexStatus.put(H3_INDEX, getIndexAvailability(dataSource.getH3Index()));
+    indexStatus.put(FST_INDEX, getIndexAvailability(dataSource.getFSTIndex()));
+    indexStatus.put(TEXT_INDEX, getIndexAvailability(dataSource.getTextIndex()));
+  }
+
+  private static String getIndexAvailability(Object index) {
+    return Objects.isNull(index) ? INDEX_NOT_AVAILABLE : INDEX_AVAILABLE;
+  }
+//Refactoring end
 
   /**
    * Get the JSON object containing star tree index details for a segment.

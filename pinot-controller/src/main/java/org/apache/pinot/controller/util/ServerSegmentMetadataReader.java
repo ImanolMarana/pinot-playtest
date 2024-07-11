@@ -221,23 +221,8 @@ public class ServerSegmentMetadataReader {
   public List<ValidDocIdsMetadataInfo> getValidDocIdsMetadataFromServer(String tableNameWithType,
       Map<String, List<String>> serverToSegmentsMap, BiMap<String, String> serverToEndpoints,
       @Nullable List<String> segmentNames, int timeoutMs, String validDocIdsType) {
-    List<Pair<String, String>> serverURLsAndBodies = new ArrayList<>();
-    for (Map.Entry<String, List<String>> serverToSegments : serverToSegmentsMap.entrySet()) {
-      List<String> segmentsForServer = serverToSegments.getValue();
-      List<String> segmentsToQuery = new ArrayList<>();
-      if (segmentNames == null || segmentNames.isEmpty()) {
-        segmentsToQuery.addAll(segmentsForServer);
-      } else {
-        Set<String> segmentNamesLookUpTable = new HashSet<>(segmentNames);
-        for (String segment : segmentsForServer) {
-          if (segmentNamesLookUpTable.contains(segment)) {
-            segmentsToQuery.add(segment);
-          }
-        }
-      }
-      serverURLsAndBodies.add(generateValidDocIdsMetadataURL(tableNameWithType, segmentsToQuery, validDocIdsType,
-          serverToEndpoints.get(serverToSegments.getKey())));
-    }
+    List<Pair<String, String>> serverURLsAndBodies = generateServerUrlsAndBodies(tableNameWithType,
+        serverToSegmentsMap, serverToEndpoints, segmentNames, validDocIdsType);
 
     BiMap<String, String> endpointsToServers = serverToEndpoints.inverse();
 
@@ -250,6 +235,40 @@ public class ServerSegmentMetadataReader {
         completionServiceHelper.doMultiPostRequest(serverURLsAndBodies, tableNameWithType, false, requestHeaders,
             timeoutMs, null);
 
+    return processServiceResponse(serviceResponse, segmentNames, serverURLsAndBodies.size());
+  }
+
+  private List<Pair<String, String>> generateServerUrlsAndBodies(String tableNameWithType,
+      Map<String, List<String>> serverToSegmentsMap, BiMap<String, String> serverToEndpoints,
+      @Nullable List<String> segmentNames, String validDocIdsType) {
+    List<Pair<String, String>> serverURLsAndBodies = new ArrayList<>();
+    for (Map.Entry<String, List<String>> serverToSegments : serverToSegmentsMap.entrySet()) {
+      List<String> segmentsForServer = serverToSegments.getValue();
+      List<String> segmentsToQuery = getSegmentsToQuery(segmentNames, segmentsForServer);
+      serverURLsAndBodies.add(generateValidDocIdsMetadataURL(tableNameWithType, segmentsToQuery, validDocIdsType,
+          serverToEndpoints.get(serverToSegments.getKey())));
+    }
+    return serverURLsAndBodies;
+  }
+
+  private List<String> getSegmentsToQuery(@Nullable List<String> segmentNames, List<String> segmentsForServer) {
+    if (segmentNames == null || segmentNames.isEmpty()) {
+      return new ArrayList<>(segmentsForServer);
+    } else {
+      List<String> segmentsToQuery = new ArrayList<>();
+      Set<String> segmentNamesLookUpTable = new HashSet<>(segmentNames);
+      for (String segment : segmentsForServer) {
+        if (segmentNamesLookUpTable.contains(segment)) {
+          segmentsToQuery.add(segment);
+        }
+      }
+      return segmentsToQuery;
+    }
+  }
+
+  private List<ValidDocIdsMetadataInfo> processServiceResponse(
+      CompletionServiceHelper.CompletionServiceResponse serviceResponse, @Nullable List<String> segmentNames,
+      int expectedServerCount) {
     Map<String, ValidDocIdsMetadataInfo> validDocIdsMetadataInfos = new HashMap<>();
     int failedParses = 0;
     int returnedServersCount = 0;
@@ -259,7 +278,7 @@ public class ServerSegmentMetadataReader {
         List<ValidDocIdsMetadataInfo> validDocIdsMetadataInfoList =
             JsonUtils.stringToObject(validDocIdsMetadataList, new TypeReference<ArrayList<ValidDocIdsMetadataInfo>>() {
             });
-        for (ValidDocIdsMetadataInfo validDocIdsMetadataInfo: validDocIdsMetadataInfoList) {
+        for (ValidDocIdsMetadataInfo validDocIdsMetadataInfo : validDocIdsMetadataInfoList) {
           validDocIdsMetadataInfos.put(validDocIdsMetadataInfo.getSegmentName(), validDocIdsMetadataInfo);
         }
         returnedServersCount++;
@@ -271,12 +290,12 @@ public class ServerSegmentMetadataReader {
 
     if (failedParses != 0) {
       LOGGER.error("Unable to parse server {} / {} response due to an error: ", failedParses,
-          serverURLsAndBodies.size());
+          expectedServerCount);
     }
 
-    if (returnedServersCount != serverURLsAndBodies.size()) {
+    if (returnedServersCount != expectedServerCount) {
       LOGGER.error("Unable to get validDocIdsMetadata from all servers. Expected: {}, Actual: {}",
-          serverURLsAndBodies.size(), returnedServersCount);
+          expectedServerCount, returnedServersCount);
     }
 
     if (segmentNames != null && !segmentNames.isEmpty() && segmentNames.size() != validDocIdsMetadataInfos.size()) {
@@ -288,6 +307,8 @@ public class ServerSegmentMetadataReader {
         returnedServersCount);
     return new ArrayList<>(validDocIdsMetadataInfos.values());
   }
+
+//Refactoring end
 
   /**
    * This method is called when the API request is to fetch validDocIds for a segment of the given table. This method

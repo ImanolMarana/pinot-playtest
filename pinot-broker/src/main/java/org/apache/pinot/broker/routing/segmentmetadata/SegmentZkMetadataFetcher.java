@@ -66,31 +66,45 @@ public class SegmentZkMetadataFetcher {
   }
 
   public void init(IdealState idealState, ExternalView externalView, Set<String> onlineSegments) {
-    if (!_initialized) {
-      _initialized = true;
-      if (!_listeners.isEmpty()) {
-        // Bulk load partition info for all online segments
-        int numSegments = onlineSegments.size();
-        List<String> segments = new ArrayList<>(numSegments);
-        List<String> segmentZKMetadataPaths = new ArrayList<>(numSegments);
-        for (String segment : onlineSegments) {
-          segments.add(segment);
-          segmentZKMetadataPaths.add(_segmentZKMetadataPathPrefix + segment);
-        }
-        List<ZNRecord> znRecords = _propertyStore.get(segmentZKMetadataPaths, null, AccessOption.PERSISTENT, false);
-        for (SegmentZkMetadataFetchListener listener : _listeners) {
-          listener.init(idealState, externalView, segments, znRecords);
-        }
-        for (int i = 0; i < numSegments; i++) {
-          if (znRecords.get(i) != null) {
-            _onlineSegmentsCached.add(segments.get(i));
-          }
-        }
-      }
-    } else {
+    if (_initialized) {
       throw new RuntimeException("Segment ZK metadata fetcher has already been initialized!");
     }
+
+    _initialized = true;
+
+    if (_listeners.isEmpty()) {
+      return;
+    }
+
+    // Bulk load partition info for all online segments
+    List<String> segments = new ArrayList<>(onlineSegments);
+    List<ZNRecord> znRecords = fetchZnRecords(segments);
+
+    for (SegmentZkMetadataFetchListener listener : _listeners) {
+      listener.init(idealState, externalView, segments, znRecords);
+    }
+
+    cacheOnlineSegments(segments, znRecords);
   }
+
+  private List<ZNRecord> fetchZnRecords(List<String> segments) {
+    int numSegments = segments.size();
+    List<String> segmentZKMetadataPaths = new ArrayList<>(numSegments);
+    for (String segment : segments) {
+      segmentZKMetadataPaths.add(_segmentZKMetadataPathPrefix + segment);
+    }
+    return _propertyStore.get(segmentZKMetadataPaths, null, AccessOption.PERSISTENT, false);
+  }
+
+  private void cacheOnlineSegments(List<String> segments, List<ZNRecord> znRecords) {
+    for (int i = 0; i < segments.size(); i++) {
+      if (znRecords.get(i) != null) {
+        _onlineSegmentsCached.add(segments.get(i));
+      }
+    }
+  }
+
+//Refactoring end
 
   public synchronized void onAssignmentChange(IdealState idealState, ExternalView externalView,
       Set<String> onlineSegments) {

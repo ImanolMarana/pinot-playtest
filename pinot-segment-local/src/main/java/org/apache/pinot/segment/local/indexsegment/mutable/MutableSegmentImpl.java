@@ -1114,57 +1114,72 @@ public class MutableSegmentImpl implements MutableSegment {
    * @return Map from dictionary id array to doc id, null if metrics aggregation cannot be enabled.
    */
   private IdMap<FixedIntArray> enableMetricsAggregationIfPossible(RealtimeSegmentConfig config) {
-    Set<String> noDictionaryColumns =
-        FieldIndexConfigsUtil.columnsWithIndexDisabled(StandardIndexes.dictionary(), config.getIndexConfigByCol());
     if (!config.aggregateMetrics() && CollectionUtils.isEmpty(config.getIngestionAggregationConfigs())) {
       _logger.info("Metrics aggregation is disabled.");
       return null;
     }
 
-    // All metric columns should have no-dictionary index.
-    // All metric columns must be single value
+    if (!allMetricColumnsHaveNoDictionaryIndexAndAreSingleValue()) {
+      return null;
+    }
+
+    if (!allDimensionAndTimeColumnsAreDictionaryEncodedAndSingleValue()) {
+      return null;
+    }
+
+    return createRecordIdMap(config);
+  }
+
+  private boolean allMetricColumnsHaveNoDictionaryIndexAndAreSingleValue() {
+    Set<String> noDictionaryColumns =
+        FieldIndexConfigsUtil.columnsWithIndexDisabled(StandardIndexes.dictionary(), config.getIndexConfigByCol());
     for (FieldSpec fieldSpec : _physicalMetricFieldSpecs) {
       String metric = fieldSpec.getName();
       if (!noDictionaryColumns.contains(metric)) {
         _logger.warn("Metrics aggregation cannot be turned ON in presence of dictionary encoded metrics, eg: {}",
             metric);
-        return null;
+        return false;
       }
 
       if (!fieldSpec.isSingleValueField()) {
         _logger.warn("Metrics aggregation cannot be turned ON in presence of multi-value metric columns, eg: {}",
             metric);
-        return null;
+        return false;
       }
     }
+    return true;
+  }
 
-    // All dimension columns should be dictionary encoded.
-    // All dimension columns must be single value
+  private boolean allDimensionAndTimeColumnsAreDictionaryEncodedAndSingleValue() {
+    Set<String> noDictionaryColumns =
+        FieldIndexConfigsUtil.columnsWithIndexDisabled(StandardIndexes.dictionary(), config.getIndexConfigByCol());
     for (FieldSpec fieldSpec : _physicalDimensionFieldSpecs) {
       String dimension = fieldSpec.getName();
       if (noDictionaryColumns.contains(dimension)) {
         _logger.warn("Metrics aggregation cannot be turned ON in presence of no-dictionary dimensions, eg: {}",
             dimension);
-        return null;
+        return false;
       }
 
       if (!fieldSpec.isSingleValueField()) {
         _logger.warn("Metrics aggregation cannot be turned ON in presence of multi-value dimension columns, eg: {}",
             dimension);
-        return null;
+        return false;
       }
     }
 
-    // Time columns should be dictionary encoded.
     for (String timeColumnName : _physicalTimeColumnNames) {
       if (noDictionaryColumns.contains(timeColumnName)) {
         _logger.warn(
             "Metrics aggregation cannot be turned ON in presence of no-dictionary datetime/time columns, eg: {}",
             timeColumnName);
-        return null;
+        return false;
       }
     }
+    return true;
+  }
 
+  private IdMap<FixedIntArray> createRecordIdMap(RealtimeSegmentConfig config) {
     int estimatedRowsToIndex;
     if (_statsHistory.isEmpty()) {
       // Choose estimated rows to index as maxNumRowsPerSegment / EXPECTED_COMPRESSION (1000, to be conservative in
@@ -1183,6 +1198,8 @@ public class MutableSegmentImpl implements MutableSegment {
     return new FixedIntArrayOffHeapIdMap(estimatedRowsToIndex, maxOverFlowHashSize, _numKeyColumns, _memoryManager,
         RECORD_ID_MAP);
   }
+
+//Refactoring end
 
   private boolean isAggregateMetricsEnabled() {
     return _recordIdMap != null;

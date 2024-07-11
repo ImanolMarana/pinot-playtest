@@ -155,243 +155,315 @@ public class InTransformFunction extends BaseTransformFunction {
     TransformResultMetadata mainFunctionMetadata = _mainFunction.getResultMetadata();
     DataType storedType = mainFunctionMetadata.getDataType().getStoredType();
     if (_valueSet != null) {
-      if (_mainFunction.getResultMetadata().isSingleValue()) {
-        switch (storedType) {
-          case INT:
-            IntOpenHashSet inIntValues = (IntOpenHashSet) _valueSet;
-            int[] intValues = _mainFunction.transformToIntValuesSV(valueBlock);
-            for (int i = 0; i < length; i++) {
-              if (inIntValues.contains(intValues[i])) {
-                _intValuesSV[i] = 1;
-              }
-            }
-            break;
-          case LONG:
-            LongOpenHashSet inLongValues = (LongOpenHashSet) _valueSet;
-            long[] longValues = _mainFunction.transformToLongValuesSV(valueBlock);
-            for (int i = 0; i < length; i++) {
-              if (inLongValues.contains(longValues[i])) {
-                _intValuesSV[i] = 1;
-              }
-            }
-            break;
-          case FLOAT:
-            FloatOpenHashSet inFloatValues = (FloatOpenHashSet) _valueSet;
-            float[] floatValues = _mainFunction.transformToFloatValuesSV(valueBlock);
-            for (int i = 0; i < length; i++) {
-              if (inFloatValues.contains(floatValues[i])) {
-                _intValuesSV[i] = 1;
-              }
-            }
-            break;
-          case DOUBLE:
-            DoubleOpenHashSet inDoubleValues = (DoubleOpenHashSet) _valueSet;
-            double[] doubleValues = _mainFunction.transformToDoubleValuesSV(valueBlock);
-            for (int i = 0; i < length; i++) {
-              if (inDoubleValues.contains(doubleValues[i])) {
-                _intValuesSV[i] = 1;
-              }
-            }
-            break;
-          case STRING:
-            ObjectOpenHashSet<String> inStringValues = (ObjectOpenHashSet<String>) _valueSet;
-            String[] stringValues = _mainFunction.transformToStringValuesSV(valueBlock);
-            for (int i = 0; i < length; i++) {
-              if (inStringValues.contains(stringValues[i])) {
-                _intValuesSV[i] = 1;
-              }
-            }
-            break;
-          case BYTES:
-            ObjectOpenHashSet<ByteArray> inBytesValues = (ObjectOpenHashSet<ByteArray>) _valueSet;
-            byte[][] bytesValues = _mainFunction.transformToBytesValuesSV(valueBlock);
-            for (int i = 0; i < length; i++) {
-              if (inBytesValues.contains(new ByteArray(bytesValues[i]))) {
-                _intValuesSV[i] = 1;
-              }
-            }
-            break;
-          case UNKNOWN:
-            fillResultUnknown(length);
-            break;
-          default:
-            throw new IllegalStateException();
-        }
-      } else {
-        switch (storedType) {
-          case INT:
-            IntOpenHashSet inIntValues = (IntOpenHashSet) _valueSet;
-            int[][] intValues = _mainFunction.transformToIntValuesMV(valueBlock);
-            for (int i = 0; i < length; i++) {
-              for (int intValue : intValues[i]) {
-                if (inIntValues.contains(intValue)) {
-                  _intValuesSV[i] = 1;
-                  break;
-                }
-              }
-            }
-            break;
-          case LONG:
-            LongOpenHashSet inLongValues = (LongOpenHashSet) _valueSet;
-            long[][] longValues = _mainFunction.transformToLongValuesMV(valueBlock);
-            for (int i = 0; i < length; i++) {
-              for (long longValue : longValues[i]) {
-                if (inLongValues.contains(longValue)) {
-                  _intValuesSV[i] = 1;
-                  break;
-                }
-              }
-            }
-            break;
-          case FLOAT:
-            FloatOpenHashSet inFloatValues = (FloatOpenHashSet) _valueSet;
-            float[][] floatValues = _mainFunction.transformToFloatValuesMV(valueBlock);
-            for (int i = 0; i < length; i++) {
-              for (float floatValue : floatValues[i]) {
-                if (inFloatValues.contains(floatValue)) {
-                  _intValuesSV[i] = 1;
-                  break;
-                }
-              }
-            }
-            break;
-          case DOUBLE:
-            DoubleOpenHashSet inDoubleValues = (DoubleOpenHashSet) _valueSet;
-            double[][] doubleValues = _mainFunction.transformToDoubleValuesMV(valueBlock);
-            for (int i = 0; i < length; i++) {
-              for (double doubleValue : doubleValues[i]) {
-                if (inDoubleValues.contains(doubleValue)) {
-                  _intValuesSV[i] = 1;
-                  break;
-                }
-              }
-            }
-            break;
-          case STRING:
-            ObjectOpenHashSet<String> inStringValues = (ObjectOpenHashSet<String>) _valueSet;
-            String[][] stringValues = _mainFunction.transformToStringValuesMV(valueBlock);
-            for (int i = 0; i < length; i++) {
-              for (String stringValue : stringValues[i]) {
-                if (inStringValues.contains(stringValue)) {
-                  _intValuesSV[i] = 1;
-                  break;
-                }
-              }
-            }
-            break;
-          case UNKNOWN:
-            fillResultUnknown(length);
-            break;
-          default:
-            throw new IllegalStateException();
-        }
-      }
+      handleValueSetCase(valueBlock, length, storedType);
     } else {
-      int numValues = _valueFunctions.length;
-      switch (storedType) {
-        case INT:
-          int[] intValues = _mainFunction.transformToIntValuesSV(valueBlock);
-          int[][] inIntValues = new int[numValues][];
-          for (int i = 0; i < numValues; i++) {
-            inIntValues[i] = _valueFunctions[i].transformToIntValuesSV(valueBlock);
-          }
-          for (int i = 0; i < length; i++) {
-            for (int[] inIntValue : inIntValues) {
-              if (intValues[i] == inIntValue[i]) {
-                _intValuesSV[i] = 1;
-                break;
-              }
-            }
-          }
-          break;
-        case LONG:
-          long[] longValues = _mainFunction.transformToLongValuesSV(valueBlock);
-          long[][] inLongValues = new long[numValues][];
-          for (int i = 0; i < numValues; i++) {
-            inLongValues[i] = _valueFunctions[i].transformToLongValuesSV(valueBlock);
-          }
-          for (int i = 0; i < length; i++) {
-            for (long[] inLongValue : inLongValues) {
-              if (longValues[i] == inLongValue[i]) {
-                _intValuesSV[i] = 1;
-                break;
-              }
-            }
-          }
-          break;
-        case FLOAT:
-          float[] floatValues = _mainFunction.transformToFloatValuesSV(valueBlock);
-          float[][] inFloatValues = new float[numValues][];
-          for (int i = 0; i < numValues; i++) {
-            inFloatValues[i] = _valueFunctions[i].transformToFloatValuesSV(valueBlock);
-          }
-          for (int i = 0; i < length; i++) {
-            // Check int bits to be aligned with the Set (Float.equals()) behavior
-            int intBits = Float.floatToIntBits(floatValues[i]);
-            for (float[] inFloatValue : inFloatValues) {
-              if (intBits == Float.floatToIntBits(inFloatValue[i])) {
-                _intValuesSV[i] = 1;
-                break;
-              }
-            }
-          }
-          break;
-        case DOUBLE:
-          double[] doubleValues = _mainFunction.transformToDoubleValuesSV(valueBlock);
-          double[][] inDoubleValues = new double[numValues][];
-          for (int i = 0; i < numValues; i++) {
-            inDoubleValues[i] = _valueFunctions[i].transformToDoubleValuesSV(valueBlock);
-          }
-          for (int i = 0; i < length; i++) {
-            // Check long bits to be aligned with the Set (Double.equals()) behavior
-            long longBits = Double.doubleToLongBits(doubleValues[i]);
-            for (double[] inDoubleValue : inDoubleValues) {
-              if (longBits == Double.doubleToLongBits(inDoubleValue[i])) {
-                _intValuesSV[i] = 1;
-                break;
-              }
-            }
-          }
-          break;
-        case STRING:
-          String[] stringValues = _mainFunction.transformToStringValuesSV(valueBlock);
-          String[][] inStringValues = new String[numValues][];
-          for (int i = 0; i < numValues; i++) {
-            inStringValues[i] = _valueFunctions[i].transformToStringValuesSV(valueBlock);
-          }
-          for (int i = 0; i < length; i++) {
-            for (String[] inStringValue : inStringValues) {
-              if (stringValues[i].equals(inStringValue[i])) {
-                _intValuesSV[i] = 1;
-                break;
-              }
-            }
-          }
-          break;
-        case BYTES:
-          byte[][] bytesValues = _mainFunction.transformToBytesValuesSV(valueBlock);
-          byte[][][] inBytesValues = new byte[numValues][][];
-          for (int i = 0; i < numValues; i++) {
-            inBytesValues[i] = _valueFunctions[i].transformToBytesValuesSV(valueBlock);
-          }
-          for (int i = 0; i < length; i++) {
-            for (byte[][] inBytesValue : inBytesValues) {
-              if (Arrays.equals(bytesValues[i], inBytesValue[i])) {
-                _intValuesSV[i] = 1;
-                break;
-              }
-            }
-          }
-          break;
-        case UNKNOWN:
-          fillResultUnknown(length);
-          break;
-        default:
-          throw new IllegalStateException();
+      handleValueFunctionsCase(valueBlock, length, storedType);
+    }
+    return _intValuesSV;
+  }
+  
+  private void handleValueSetCase(ValueBlock valueBlock, int length, DataType storedType) {
+    if (_mainFunction.getResultMetadata().isSingleValue()) {
+      handleSingleValueSetCase(valueBlock, length, storedType);
+    } else {
+      handleMultiValueSetCase(valueBlock, length, storedType);
+    }
+  }
+  
+  private void handleValueFunctionsCase(ValueBlock valueBlock, int length, DataType storedType) {
+    int numValues = _valueFunctions.length;
+    switch (storedType) {
+      case INT:
+        handleIntValueFunctions(valueBlock, length, numValues);
+        break;
+      case LONG:
+        handleLongValueFunctions(valueBlock, length, numValues);
+        break;
+      case FLOAT:
+        handleFloatValueFunctions(valueBlock, length, numValues);
+        break;
+      case DOUBLE:
+        handleDoubleValueFunctions(valueBlock, length, numValues);
+        break;
+      case STRING:
+        handleStringValueFunctions(valueBlock, length, numValues);
+        break;
+      case BYTES:
+        handleBytesValueFunctions(valueBlock, length, numValues);
+        break;
+      case UNKNOWN:
+        fillResultUnknown(length);
+        break;
+      default:
+        throw new IllegalStateException();
+    }
+  }
+  
+  private void handleSingleValueSetCase(ValueBlock valueBlock, int length, DataType storedType) {
+    switch (storedType) {
+      case INT:
+        compareIntValuesWithSet((IntOpenHashSet) _valueSet, _mainFunction.transformToIntValuesSV(valueBlock), length);
+        break;
+      case LONG:
+        compareLongValuesWithSet((LongOpenHashSet) _valueSet, _mainFunction.transformToLongValuesSV(valueBlock), length);
+        break;
+      case FLOAT:
+        compareFloatValuesWithSet((FloatOpenHashSet) _valueSet, _mainFunction.transformToFloatValuesSV(valueBlock), length);
+        break;
+      case DOUBLE:
+        compareDoubleValuesWithSet((DoubleOpenHashSet) _valueSet, _mainFunction.transformToDoubleValuesSV(valueBlock),
+            length);
+        break;
+      case STRING:
+        compareStringValuesWithSet((ObjectOpenHashSet<String>) _valueSet,
+            _mainFunction.transformToStringValuesSV(valueBlock), length);
+        break;
+      case BYTES:
+        compareBytesValuesWithSet((ObjectOpenHashSet<ByteArray>) _valueSet,
+            _mainFunction.transformToBytesValuesSV(valueBlock), length);
+        break;
+      case UNKNOWN:
+        fillResultUnknown(length);
+        break;
+      default:
+        throw new IllegalStateException();
+    }
+  }
+  
+  private void compareIntValuesWithSet(IntOpenHashSet inIntValues, int[] intValues, int length) {
+    for (int i = 0; i < length; i++) {
+      if (inIntValues.contains(intValues[i])) {
+        _intValuesSV[i] = 1;
       }
     }
+  }
+  
+  private void compareLongValuesWithSet(LongOpenHashSet inLongValues, long[] longValues, int length) {
+    for (int i = 0; i < length; i++) {
+      if (inLongValues.contains(longValues[i])) {
+        _intValuesSV[i] = 1;
+      }
+    }
+  }
+  
+  private void compareFloatValuesWithSet(FloatOpenHashSet inFloatValues, float[] floatValues, int length) {
+    for (int i = 0; i < length; i++) {
+      if (inFloatValues.contains(floatValues[i])) {
+        _intValuesSV[i] = 1;
+      }
+    }
+  }
+  
+  private void compareDoubleValuesWithSet(DoubleOpenHashSet inDoubleValues, double[] doubleValues, int length) {
+    for (int i = 0; i < length; i++) {
+      if (inDoubleValues.contains(doubleValues[i])) {
+        _intValuesSV[i] = 1;
+      }
+    }
+  }
+  
+  private void compareStringValuesWithSet(ObjectOpenHashSet<String> inStringValues, String[] stringValues, int length) {
+    for (int i = 0; i < length; i++) {
+      if (inStringValues.contains(stringValues[i])) {
+        _intValuesSV[i] = 1;
+      }
+    }
+  }
+  
+  private void compareBytesValuesWithSet(ObjectOpenHashSet<ByteArray> inBytesValues, byte[][] bytesValues, int length) {
+    for (int i = 0; i < length; i++) {
+      if (inBytesValues.contains(new ByteArray(bytesValues[i]))) {
+        _intValuesSV[i] = 1;
+      }
+    }
+  }
+  
+  private void handleMultiValueSetCase(ValueBlock valueBlock, int length, DataType storedType) {
+    switch (storedType) {
+      case INT:
+        compareIntValuesWithSetMV((IntOpenHashSet) _valueSet, _mainFunction.transformToIntValuesMV(valueBlock), length);
+        break;
+      case LONG:
+        compareLongValuesWithSetMV((LongOpenHashSet) _valueSet, _mainFunction.transformToLongValuesMV(valueBlock),
+            length);
+        break;
+      case FLOAT:
+        compareFloatValuesWithSetMV((FloatOpenHashSet) _valueSet, _mainFunction.transformToFloatValuesMV(valueBlock),
+            length);
+        break;
+      case DOUBLE:
+        compareDoubleValuesWithSetMV((DoubleOpenHashSet) _valueSet, _mainFunction.transformToDoubleValuesMV(valueBlock),
+            length);
+        break;
+      case STRING:
+        compareStringValuesWithSetMV((ObjectOpenHashSet<String>) _valueSet,
+            _mainFunction.transformToStringValuesMV(valueBlock), length);
+        break;
+      case UNKNOWN:
+        fillResultUnknown(length);
+        break;
+      default:
+        throw new IllegalStateException();
+    }
+  }
+  
+  private void compareIntValuesWithSetMV(IntOpenHashSet inIntValues, int[][] intValues, int length) {
+    for (int i = 0; i < length; i++) {
+      for (int intValue : intValues[i]) {
+        if (inIntValues.contains(intValue)) {
+          _intValuesSV[i] = 1;
+          break;
+        }
+      }
+    }
+  }
+  
+  private void compareLongValuesWithSetMV(LongOpenHashSet inLongValues, long[][] longValues, int length) {
+    for (int i = 0; i < length; i++) {
+      for (long longValue : longValues[i]) {
+        if (inLongValues.contains(longValue)) {
+          _intValuesSV[i] = 1;
+          break;
+        }
+      }
+    }
+  }
 
-    return _intValuesSV;
+  private void compareFloatValuesWithSetMV(FloatOpenHashSet inFloatValues, float[][] floatValues, int length) {
+    for (int i = 0; i < length; i++) {
+      for (float floatValue : floatValues[i]) {
+        if (inFloatValues.contains(floatValue)) {
+          _intValuesSV[i] = 1;
+          break;
+        }
+      }
+    }
+  }
+  
+  private void compareDoubleValuesWithSetMV(DoubleOpenHashSet inDoubleValues, double[][] doubleValues, int length) {
+    for (int i = 0; i < length; i++) {
+      for (double doubleValue : doubleValues[i]) {
+        if (inDoubleValues.contains(doubleValue)) {
+          _intValuesSV[i] = 1;
+          break;
+        }
+      }
+    }
+  }
+  
+  private void compareStringValuesWithSetMV(ObjectOpenHashSet<String> inStringValues, String[][] stringValues,
+      int length) {
+    for (int i = 0; i < length; i++) {
+      for (String stringValue : stringValues[i]) {
+        if (inStringValues.contains(stringValue)) {
+          _intValuesSV[i] = 1;
+          break;
+        }
+      }
+    }
+  }
+  
+  private void handleIntValueFunctions(ValueBlock valueBlock, int length, int numValues) {
+    int[] intValues = _mainFunction.transformToIntValuesSV(valueBlock);
+    int[][] inIntValues = new int[numValues][];
+    for (int i = 0; i < numValues; i++) {
+      inIntValues[i] = _valueFunctions[i].transformToIntValuesSV(valueBlock);
+    }
+    for (int i = 0; i < length; i++) {
+      for (int[] inIntValue : inIntValues) {
+        if (intValues[i] == inIntValue[i]) {
+          _intValuesSV[i] = 1;
+          break;
+        }
+      }
+    }
+  }
+  
+  private void handleLongValueFunctions(ValueBlock valueBlock, int length, int numValues) {
+    long[] longValues = _mainFunction.transformToLongValuesSV(valueBlock);
+    long[][] inLongValues = new long[numValues][];
+    for (int i = 0; i < numValues; i++) {
+      inLongValues[i] = _valueFunctions[i].transformToLongValuesSV(valueBlock);
+    }
+    for (int i = 0; i < length; i++) {
+      for (long[] inLongValue : inLongValues) {
+        if (longValues[i] == inLongValue[i]) {
+          _intValuesSV[i] = 1;
+          break;
+        }
+      }
+    }
+  }
+  
+  private void handleFloatValueFunctions(ValueBlock valueBlock, int length, int numValues) {
+    float[] floatValues = _mainFunction.transformToFloatValuesSV(valueBlock);
+    float[][] inFloatValues = new float[numValues][];
+    for (int i = 0; i < numValues; i++) {
+      inFloatValues[i] = _valueFunctions[i].transformToFloatValuesSV(valueBlock);
+    }
+    for (int i = 0; i < length; i++) {
+      // Check int bits to be aligned with the Set (Float.equals()) behavior
+      int intBits = Float.floatToIntBits(floatValues[i]);
+      for (float[] inFloatValue : inFloatValues) {
+        if (intBits == Float.floatToIntBits(inFloatValue[i])) {
+          _intValuesSV[i] = 1;
+          break;
+        }
+      }
+    }
+  }
+  
+  private void handleDoubleValueFunctions(ValueBlock valueBlock, int length, int numValues) {
+    double[] doubleValues = _mainFunction.transformToDoubleValuesSV(valueBlock);
+    double[][] inDoubleValues = new double[numValues][];
+    for (int i = 0; i < numValues; i++) {
+      inDoubleValues[i] = _valueFunctions[i].transformToDoubleValuesSV(valueBlock);
+    }
+    for (int i = 0; i < length; i++) {
+      // Check long bits to be aligned with the Set (Double.equals()) behavior
+      long longBits = Double.doubleToLongBits(doubleValues[i]);
+      for (double[] inDoubleValue : inDoubleValues) {
+        if (longBits == Double.doubleToLongBits(inDoubleValue[i])) {
+          _intValuesSV[i] = 1;
+          break;
+        }
+      }
+    }
+  }
+  
+  private void handleStringValueFunctions(ValueBlock valueBlock, int length, int numValues) {
+    String[] stringValues = _mainFunction.transformToStringValuesSV(valueBlock);
+    String[][] inStringValues = new String[numValues][];
+    for (int i = 0; i < numValues; i++) {
+      inStringValues[i] = _valueFunctions[i].transformToStringValuesSV(valueBlock);
+    }
+    for (int i = 0; i < length; i++) {
+      for (String[] inStringValue : inStringValues) {
+        if (stringValues[i].equals(inStringValue[i])) {
+          _intValuesSV[i] = 1;
+          break;
+        }
+      }
+    }
+  }
+  
+  private void handleBytesValueFunctions(ValueBlock valueBlock, int length, int numValues) {
+    byte[][] bytesValues = _mainFunction.transformToBytesValuesSV(valueBlock);
+    byte[][][] inBytesValues = new byte[numValues][][];
+    for (int i = 0; i < numValues; i++) {
+      inBytesValues[i] = _valueFunctions[i].transformToBytesValuesSV(valueBlock);
+    }
+    for (int i = 0; i < length; i++) {
+      for (byte[][] inBytesValue : inBytesValues) {
+        if (Arrays.equals(bytesValues[i], inBytesValue[i])) {
+          _intValuesSV[i] = 1;
+          break;
+        }
+      }
+    }
+  }
+
+//Refactoring end
   }
 
   @Nullable

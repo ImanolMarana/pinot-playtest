@@ -264,40 +264,55 @@ public class StarTreeUtils {
     assert filter.getType() == FilterContext.Type.OR;
 
     for (FilterContext child : filter.getChildren()) {
-      switch (child.getType()) {
-        case AND:
-          return false;
-        case OR:
-          if (!extractOrClausePredicates(child, predicates)) {
-            return false;
-          }
-          break;
-        case NOT:
-          boolean negated = true;
-          FilterContext negatedChild = child.getChildren().get(0);
-          while (true) {
-            FilterContext.Type type = negatedChild.getType();
-            if (type == FilterContext.Type.PREDICATE) {
-              predicates.add(ObjectBooleanPair.of(negatedChild.getPredicate(), negated));
-              break;
-            }
-            if (type == FilterContext.Type.NOT) {
-              negated = !negated;
-              negatedChild = negatedChild.getChildren().get(0);
-              continue;
-            }
-            // Do not allow nested AND/OR under NOT
-            return false;
-          }
-          break;
-        case PREDICATE:
-          predicates.add(ObjectBooleanPair.of(child.getPredicate(), false));
-          break;
-        default:
-          throw new IllegalStateException();
+      if (!extractOrClausePredicatesHelper(child, predicates)) {
+        return false;
       }
     }
     return true;
+  }
+
+  private static boolean extractOrClausePredicatesHelper(FilterContext child,
+      List<ObjectBooleanPair<Predicate>> predicates) {
+    switch (child.getType()) {
+      case AND:
+        return false;
+      case OR:
+        if (!extractOrClausePredicates(child, predicates)) {
+          return false;
+        }
+        break;
+      case NOT:
+        return extractNegatedPredicates(child, predicates);
+      case PREDICATE:
+        predicates.add(ObjectBooleanPair.of(child.getPredicate(), false));
+        break;
+      default:
+        throw new IllegalStateException();
+    }
+    return true;
+  }
+  
+  private static boolean extractNegatedPredicates(FilterContext child,
+      List<ObjectBooleanPair<Predicate>> predicates) {
+    boolean negated = true;
+    FilterContext negatedChild = child.getChildren().get(0);
+    while (true) {
+      FilterContext.Type type = negatedChild.getType();
+      if (type == FilterContext.Type.PREDICATE) {
+        predicates.add(ObjectBooleanPair.of(negatedChild.getPredicate(), negated));
+        break;
+      }
+      if (type == FilterContext.Type.NOT) {
+        negated = !negated;
+        negatedChild = negatedChild.getChildren().get(0);
+        continue;
+      }
+      // Do not allow nested AND/OR under NOT
+      return false;
+    }
+    return true;
+  }
+//Refactoring end
   }
 
   /**

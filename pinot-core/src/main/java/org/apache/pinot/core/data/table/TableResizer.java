@@ -99,9 +99,14 @@ public class TableResizer {
       comparators[i] = orderByExpression.isAsc() ? Comparator.naturalOrder() : Comparator.reverseOrder();
       nullComparisonResults[i] = orderByExpression.isNullsLast() ? -1 : 1;
     }
-    boolean nullHandlingEnabled = queryContext.isNullHandlingEnabled();
+    _intermediateRecordComparator = createIntermediateRecordComparator(queryContext.isNullHandlingEnabled(),
+        comparators, nullComparisonResults);
+  }
+
+  private Comparator<IntermediateRecord> createIntermediateRecordComparator(boolean nullHandlingEnabled,
+      Comparator[] comparators, int[] nullComparisonResults) {
     if (nullHandlingEnabled) {
-      _intermediateRecordComparator = (o1, o2) -> {
+      return (o1, o2) -> {
         for (int i = 0; i < _numOrderByExpressions; i++) {
           Object v1 = o1._values[i];
           Object v2 = o2._values[i];
@@ -121,7 +126,7 @@ public class TableResizer {
         return 0;
       };
     } else {
-      _intermediateRecordComparator = (o1, o2) -> {
+      return (o1, o2) -> {
         for (int i = 0; i < _numOrderByExpressions; i++) {
           int result = comparators[i].compare(o1._values[i], o2._values[i]);
           if (result != 0) {
@@ -132,6 +137,8 @@ public class TableResizer {
       };
     }
   }
+
+//Refactoring end
 
   /**
    * Helper method to construct a OrderByValueExtractor based on the given expression.

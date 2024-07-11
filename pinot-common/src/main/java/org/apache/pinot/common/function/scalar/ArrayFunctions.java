@@ -230,9 +230,95 @@ public class ArrayFunctions {
 
   @ScalarFunction(names = {"array", "arrayValueConstructor"}, isVarArg = true)
   public static Object arrayValueConstructor(Object... arr) {
-    if (arr == null || arr.length == 0) {
-      return arr;
-    }
+  if (arr == null || arr.length == 0) {
+    return arr;
+  }
+  return createTypedArray(arr);
+}
+
+private static Object createTypedArray(Object[] arr) {
+  Class<?> clazz = arr[0].getClass();
+  if (clazz == Integer.class) {
+    return createIntArray(arr);
+  }
+  if (clazz == Long.class) {
+    return createLongArray(arr);
+  }
+  if (clazz == Float.class) {
+    return createFloatArray(arr);
+  }
+  if (clazz == Double.class) {
+    return createDoubleArray(arr);
+  }
+  if (clazz == Boolean.class) {
+    return createBooleanArray(arr);
+  }
+  if (clazz == BigDecimal.class) {
+    return createBigDecimalArray(arr);
+  }
+  if (clazz == String.class) {
+    return createStringArray(arr);
+  }
+  return arr;
+}
+
+private static Object createIntArray(Object[] arr) {
+  int[] intArr = new int[arr.length];
+  for (int i = 0; i < arr.length; i++) {
+    intArr[i] = (Integer) arr[i];
+  }
+  return intArr;
+}
+
+private static Object createLongArray(Object[] arr) {
+  long[] longArr = new long[arr.length];
+  for (int i = 0; i < arr.length; i++) {
+    longArr[i] = (Long) arr[i];
+  }
+  return longArr;
+}
+
+private static Object createFloatArray(Object[] arr) {
+  float[] floatArr = new float[arr.length];
+  for (int i = 0; i < arr.length; i++) {
+    floatArr[i] = (Float) arr[i];
+  }
+  return floatArr;
+}
+
+private static Object createDoubleArray(Object[] arr) {
+  double[] doubleArr = new double[arr.length];
+  for (int i = 0; i < arr.length; i++) {
+    doubleArr[i] = (Double) arr[i];
+  }
+  return doubleArr;
+}
+
+private static Object createBooleanArray(Object[] arr) {
+  boolean[] boolArr = new boolean[arr.length];
+  for (int i = 0; i < arr.length; i++) {
+    boolArr[i] = (Boolean) arr[i];
+  }
+  return boolArr;
+}
+
+private static Object createBigDecimalArray(Object[] arr) {
+  BigDecimal[] bigDecimalArr = new BigDecimal[arr.length];
+  for (int i = 0; i < arr.length; i++) {
+    bigDecimalArr[i] = (BigDecimal) arr[i];
+  }
+  return bigDecimalArr;
+}
+
+private static Object createStringArray(Object[] arr) {
+  String[] strArr = new String[arr.length];
+  for (int i = 0; i < arr.length; i++) {
+    strArr[i] = (String) arr[i];
+  }
+  return strArr;
+}
+
+//Refactoring end
     Class<?> clazz = arr[0].getClass();
     if (clazz == Integer.class) {
       int[] intArr = new int[arr.length];

@@ -294,26 +294,7 @@ public class HashJoinOperator extends MultiStageOperator {
       if (!needUnmatchedRightRows()) {
         return TransferableBlockUtils.getEndOfStreamTransferableBlock(_leftSideStats);
       }
-      // TODO: Moved to a different function.
-      // Return remaining non-matched rows for non-inner join.
-      List<Object[]> returnRows = new ArrayList<>();
-      for (Map.Entry<Object, ArrayList<Object[]>> entry : _broadcastRightTable.entrySet()) {
-        List<Object[]> rightRows = entry.getValue();
-        BitSet matchedIndices = _matchedRightRows.get(entry.getKey());
-        if (matchedIndices == null) {
-          for (Object[] rightRow : rightRows) {
-            returnRows.add(joinRow(null, rightRow));
-          }
-        } else {
-          int numRightRows = rightRows.size();
-          int unmatchedIndex = 0;
-          while ((unmatchedIndex = matchedIndices.nextClearBit(unmatchedIndex)) < numRightRows) {
-            returnRows.add(joinRow(null, rightRows.get(unmatchedIndex++)));
-          }
-        }
-      }
-      _isTerminated = true;
-      return new TransferableBlock(returnRows, _resultSchema, DataBlock.Type.ROW);
+      return handleEndOfStreamBlock();
     }
     List<Object[]> rows;
     switch (_joinType) {
@@ -333,6 +314,30 @@ public class HashJoinOperator extends MultiStageOperator {
     // TODO: Rows can be empty here. Consider fetching another left block instead of returning empty block.
     return new TransferableBlock(rows, _resultSchema, DataBlock.Type.ROW);
   }
+
+  private TransferableBlock handleEndOfStreamBlock() {
+    // Return remaining non-matched rows for non-inner join.
+    List<Object[]> returnRows = new ArrayList<>();
+    for (Map.Entry<Object, ArrayList<Object[]>> entry : _broadcastRightTable.entrySet()) {
+      List<Object[]> rightRows = entry.getValue();
+      BitSet matchedIndices = _matchedRightRows.get(entry.getKey());
+      if (matchedIndices == null) {
+        for (Object[] rightRow : rightRows) {
+          returnRows.add(joinRow(null, rightRow));
+        }
+      } else {
+        int numRightRows = rightRows.size();
+        int unmatchedIndex = 0;
+        while ((unmatchedIndex = matchedIndices.nextClearBit(unmatchedIndex)) < numRightRows) {
+          returnRows.add(joinRow(null, rightRows.get(unmatchedIndex++)));
+        }
+      }
+    }
+    _isTerminated = true;
+    return new TransferableBlock(returnRows, _resultSchema, DataBlock.Type.ROW);
+  }
+
+//Refactoring end
 
   private List<Object[]> buildJoinedDataBlockSemi(TransferableBlock leftBlock) {
     List<Object[]> container = leftBlock.getContainer();

@@ -139,25 +139,46 @@ public class ForwardIndexType extends AbstractIndexType<ForwardIndexConfig, Forw
 
       Collection<FieldConfig> fieldConfigs = tableConfig.getFieldConfigList();
       if (fieldConfigs != null) {
-        for (FieldConfig fieldConfig : fieldConfigs) {
-          Map<String, String> properties = fieldConfig.getProperties();
-          if (properties != null && isDisabled(properties)) {
-            fwdConfig.put(fieldConfig.getName(), ForwardIndexConfig.DISABLED);
-          } else {
-            ForwardIndexConfig config = createConfigFromFieldConfig(fieldConfig);
-            if (!config.equals(ForwardIndexConfig.DEFAULT)) {
-              fwdConfig.put(fieldConfig.getName(), config);
-            }
-            // It is important to do not explicitly add the default value here in order to avoid exclusive problems with
-            // the default `fromIndexes` deserializer.
-          }
-        }
+        populateFwdConfig(fwdConfig, fieldConfigs);
       }
       return fwdConfig;
     };
     return IndexConfigDeserializer.fromIndexes(getPrettyName(), getIndexConfigClass())
         .withExclusiveAlternative(fromOld);
   }
+
+  private void populateFwdConfig(Map<String, ForwardIndexConfig> fwdConfig, Collection<FieldConfig> fieldConfigs) {
+    for (FieldConfig fieldConfig : fieldConfigs) {
+      Map<String, String> properties = fieldConfig.getProperties();
+      if (properties != null && isDisabled(properties)) {
+        fwdConfig.put(fieldConfig.getName(), ForwardIndexConfig.DISABLED);
+      } else {
+        ForwardIndexConfig config = createConfigFromFieldConfig(fieldConfig);
+        if (!config.equals(ForwardIndexConfig.DEFAULT)) {
+          fwdConfig.put(fieldConfig.getName(), config);
+        }
+        // It is important to do not explicitly add the default value here in order to avoid exclusive problems with
+        // the default `fromIndexes` deserializer.
+      }
+    }
+  }
+
+  private boolean isDisabled(Map<String, String> props) {
+    return Boolean.parseBoolean(
+        props.getOrDefault(FieldConfig.FORWARD_INDEX_DISABLED, FieldConfig.DEFAULT_FORWARD_INDEX_DISABLED));
+  }
+
+  private ForwardIndexConfig createConfigFromFieldConfig(FieldConfig fieldConfig) {
+    ForwardIndexConfig.Builder builder = new ForwardIndexConfig.Builder();
+    builder.withCompressionCodec(fieldConfig.getCompressionCodec());
+    Map<String, String> properties = fieldConfig.getProperties();
+    if (properties != null) {
+      builder.withLegacyProperties(properties);
+    }
+    return builder.build();
+  }
+
+//Refactoring end
 
   private boolean isDisabled(Map<String, String> props) {
     return Boolean.parseBoolean(

@@ -148,303 +148,392 @@ public final class ExpressionScanDocIdIterator implements ScanBasedDocIdIterator
     int numDocs = projectionBlock.getNumDocs();
     TransformResultMetadata resultMetadata = _transformFunction.getResultMetadata();
     if (resultMetadata.isSingleValue()) {
-      _numEntriesScanned += numDocs;
-      RoaringBitmap nullBitmap = null;
-      if (_predicateEvaluationResult == PredicateEvaluationResult.NULL) {
-        nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
-        if (nullBitmap != null) {
-          for (int i : nullBitmap) {
-            matchingDocIds.add(_docIdBuffer[i]);
-          }
-        }
-        return;
+      processSingleValueProjectionBlock(projectionBlock, matchingDocIds, numDocs, resultMetadata);
+    } else {
+      processMultiValueProjectionBlock(projectionBlock, matchingDocIds, numDocs, resultMetadata);
+    }
+  }
+
+  private void processSingleValueProjectionBlock(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds,
+      int numDocs, TransformResultMetadata resultMetadata) {
+    _numEntriesScanned += numDocs;
+    if (_predicateEvaluationResult == PredicateEvaluationResult.NULL) {
+      processNullPredicateEvaluationResult(projectionBlock, matchingDocIds);
+      return;
+    }
+    boolean predicateEvaluationResult = _predicateEvaluationResult == PredicateEvaluationResult.TRUE;
+    assert (_predicateEvaluator != null);
+    if (resultMetadata.hasDictionary()) {
+      processDictionaryEncodedSingleValue(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+    } else {
+      processRawSingleValue(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult, resultMetadata);
+    }
+  }
+
+  private void processMultiValueProjectionBlock(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds,
+      int numDocs, TransformResultMetadata resultMetadata) {
+    // TODO(https://github.com/apache/pinot/issues/10882): support NULL for multi-value.
+    if (_predicateEvaluationResult == PredicateEvaluationResult.NULL) {
+      return;
+    }
+    boolean predicateEvaluationResult = _predicateEvaluationResult == PredicateEvaluationResult.TRUE;
+    assert (_predicateEvaluator != null);
+    if (resultMetadata.hasDictionary()) {
+      processDictionaryEncodedMultiValue(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+    } else {
+      processRawMultiValue(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult, resultMetadata);
+    }
+  }
+
+  private void processNullPredicateEvaluationResult(ProjectionBlock projectionBlock,
+      BitmapDataProvider matchingDocIds) {
+    RoaringBitmap nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
+    if (nullBitmap != null) {
+      for (int i : nullBitmap) {
+        matchingDocIds.add(_docIdBuffer[i]);
       }
-      boolean predicateEvaluationResult = _predicateEvaluationResult == PredicateEvaluationResult.TRUE;
-      assert (_predicateEvaluator != null);
-      if (resultMetadata.hasDictionary()) {
-        int[] dictIds = _transformFunction.transformToDictIdsSV(projectionBlock);
-        if (_nullHandlingEnabled) {
-          nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
-        }
-        if (nullBitmap != null && !nullBitmap.isEmpty()) {
-          for (int i = 0; i < numDocs; i++) {
-            if (_predicateEvaluator.applySV(dictIds[i]) == predicateEvaluationResult && !nullBitmap.contains(i)) {
-              matchingDocIds.add(_docIdBuffer[i]);
-            }
-          }
-        } else {
-          for (int i = 0; i < numDocs; i++) {
-            if (_predicateEvaluator.applySV(dictIds[i]) == predicateEvaluationResult) {
-              matchingDocIds.add(_docIdBuffer[i]);
-            }
-          }
-        }
-      } else {
-        switch (resultMetadata.getDataType().getStoredType()) {
-          case INT:
-            int[] intValues = _transformFunction.transformToIntValuesSV(projectionBlock);
-            if (_nullHandlingEnabled) {
-              nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
-            }
-            if (nullBitmap != null && !nullBitmap.isEmpty()) {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(intValues[i]) == predicateEvaluationResult && !nullBitmap.contains(i)) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            } else {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(intValues[i]) == predicateEvaluationResult) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            }
-            break;
-          case LONG:
-            long[] longValues = _transformFunction.transformToLongValuesSV(projectionBlock);
-            if (_nullHandlingEnabled) {
-              nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
-            }
-            if (nullBitmap != null && !nullBitmap.isEmpty()) {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(longValues[i]) == predicateEvaluationResult && !nullBitmap.contains(
-                    i)) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            } else {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(longValues[i]) == predicateEvaluationResult) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            }
-            break;
-          case FLOAT:
-            float[] floatValues = _transformFunction.transformToFloatValuesSV(projectionBlock);
-            if (_nullHandlingEnabled) {
-              nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
-            }
-            if (nullBitmap != null && !nullBitmap.isEmpty()) {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(floatValues[i]) == predicateEvaluationResult && !nullBitmap.contains(
-                    i)) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            } else {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(floatValues[i]) == predicateEvaluationResult) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            }
-            break;
-          case DOUBLE:
-            double[] doubleValues = _transformFunction.transformToDoubleValuesSV(projectionBlock);
-            if (_nullHandlingEnabled) {
-              nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
-            }
-            if (nullBitmap != null && !nullBitmap.isEmpty()) {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(doubleValues[i]) == predicateEvaluationResult && !nullBitmap.contains(
-                    i)) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            } else {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(doubleValues[i]) == predicateEvaluationResult) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            }
-            break;
-          case STRING:
-            String[] stringValues = _transformFunction.transformToStringValuesSV(projectionBlock);
-            if (_nullHandlingEnabled) {
-              nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
-            }
-            if (nullBitmap != null && !nullBitmap.isEmpty()) {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(stringValues[i]) == predicateEvaluationResult && !nullBitmap.contains(
-                    i)) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            } else {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(stringValues[i]) == predicateEvaluationResult) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            }
-            break;
-          case BYTES:
-            byte[][] bytesValues = _transformFunction.transformToBytesValuesSV(projectionBlock);
-            if (_nullHandlingEnabled) {
-              nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
-            }
-            if (nullBitmap != null && !nullBitmap.isEmpty()) {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(bytesValues[i]) == predicateEvaluationResult && !nullBitmap.contains(
-                    i)) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            } else {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(bytesValues[i]) == predicateEvaluationResult) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            }
-            break;
-          case BIG_DECIMAL:
-            BigDecimal[] bigDecimalValues = _transformFunction.transformToBigDecimalValuesSV(projectionBlock);
-            if (_nullHandlingEnabled) {
-              nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
-            }
-            if (nullBitmap != null && !nullBitmap.isEmpty()) {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(bigDecimalValues[i]) == predicateEvaluationResult
-                    && !nullBitmap.contains(i)) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            } else {
-              for (int i = 0; i < numDocs; i++) {
-                if (_predicateEvaluator.applySV(bigDecimalValues[i]) == predicateEvaluationResult) {
-                  matchingDocIds.add(_docIdBuffer[i]);
-                }
-              }
-            }
-            break;
-          default:
-            throw new IllegalStateException();
+    }
+  }
+
+  private void processDictionaryEncodedSingleValue(ProjectionBlock projectionBlock,
+      BitmapDataProvider matchingDocIds, int numDocs, boolean predicateEvaluationResult) {
+    int[] dictIds = _transformFunction.transformToDictIdsSV(projectionBlock);
+    RoaringBitmap nullBitmap = null;
+    if (_nullHandlingEnabled) {
+      nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
+    }
+    if (nullBitmap != null && !nullBitmap.isEmpty()) {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(dictIds[i]) == predicateEvaluationResult && !nullBitmap.contains(i)) {
+          matchingDocIds.add(_docIdBuffer[i]);
         }
       }
     } else {
-      // TODO(https://github.com/apache/pinot/issues/10882): support NULL for multi-value.
-      if (_predicateEvaluationResult == PredicateEvaluationResult.NULL) {
-        return;
-      }
-      boolean predicateEvaluationResult = _predicateEvaluationResult == PredicateEvaluationResult.TRUE;
-      assert (_predicateEvaluator != null);
-      if (resultMetadata.hasDictionary()) {
-        int[][] dictIdsArray = _transformFunction.transformToDictIdsMV(projectionBlock);
-        for (int i = 0; i < numDocs; i++) {
-          int[] dictIds = dictIdsArray[i];
-          int numDictIds = dictIds.length;
-          _numEntriesScanned += numDictIds;
-          if (_predicateEvaluator.applyMV(dictIds, numDictIds) == predicateEvaluationResult) {
-            matchingDocIds.add(_docIdBuffer[i]);
-          }
-        }
-      } else {
-        switch (resultMetadata.getDataType().getStoredType()) {
-          case INT:
-            int[][] intValuesArray = _transformFunction.transformToIntValuesMV(projectionBlock);
-            for (int i = 0; i < numDocs; i++) {
-              int[] values = intValuesArray[i];
-              int numValues = values.length;
-              _numEntriesScanned += numValues;
-              if (_predicateEvaluator.applyMV(values, numValues) == predicateEvaluationResult) {
-                matchingDocIds.add(_docIdBuffer[i]);
-              }
-            }
-            break;
-          case LONG:
-            long[][] longValuesArray = _transformFunction.transformToLongValuesMV(projectionBlock);
-            for (int i = 0; i < numDocs; i++) {
-              long[] values = longValuesArray[i];
-              int numValues = values.length;
-              _numEntriesScanned += numValues;
-              if (_predicateEvaluator.applyMV(values, numValues) == predicateEvaluationResult) {
-                matchingDocIds.add(_docIdBuffer[i]);
-              }
-            }
-            break;
-          case FLOAT:
-            float[][] floatValuesArray = _transformFunction.transformToFloatValuesMV(projectionBlock);
-            for (int i = 0; i < numDocs; i++) {
-              float[] values = floatValuesArray[i];
-              int numValues = values.length;
-              _numEntriesScanned += numValues;
-              if (_predicateEvaluator.applyMV(values, numValues) == predicateEvaluationResult) {
-                matchingDocIds.add(_docIdBuffer[i]);
-              }
-            }
-            break;
-          case DOUBLE:
-            double[][] doubleValuesArray = _transformFunction.transformToDoubleValuesMV(projectionBlock);
-            for (int i = 0; i < numDocs; i++) {
-              double[] values = doubleValuesArray[i];
-              int numValues = values.length;
-              _numEntriesScanned += numValues;
-              if (_predicateEvaluator.applyMV(values, numValues) == predicateEvaluationResult) {
-                matchingDocIds.add(_docIdBuffer[i]);
-              }
-            }
-            break;
-          case STRING:
-            String[][] valuesArray = _transformFunction.transformToStringValuesMV(projectionBlock);
-            for (int i = 0; i < numDocs; i++) {
-              String[] values = valuesArray[i];
-              int numValues = values.length;
-              _numEntriesScanned += numValues;
-              if (_predicateEvaluator.applyMV(values, numValues) == predicateEvaluationResult) {
-                matchingDocIds.add(_docIdBuffer[i]);
-              }
-            }
-            break;
-          default:
-            throw new IllegalStateException();
-        }
-      }
-    }
-  }
-
-  @Override
-  public long getNumEntriesScanned() {
-    return _numEntriesScanned;
-  }
-
-  /**
-   * NOTE: This operator contains only one block.
-   */
-  private class RangeDocIdSetOperator extends BaseOperator<DocIdSetBlock> {
-    static final String EXPLAIN_NAME = "DOC_ID_SET_RANGE";
-
-    DocIdSetBlock _docIdSetBlock;
-
-    RangeDocIdSetOperator(int startDocId, int endDocId) {
-      int numDocs = endDocId - startDocId;
       for (int i = 0; i < numDocs; i++) {
-        _docIdBuffer[i] = startDocId + i;
+        if (_predicateEvaluator.applySV(dictIds[i]) == predicateEvaluationResult) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
       }
-      _docIdSetBlock = new DocIdSetBlock(_docIdBuffer, numDocs);
-    }
-
-    @Override
-    protected DocIdSetBlock getNextBlock() {
-      DocIdSetBlock docIdSetBlock = _docIdSetBlock;
-      _docIdSetBlock = null;
-      return docIdSetBlock;
-    }
-
-    @Override
-    public String toExplainString() {
-      return EXPLAIN_NAME;
-    }
-
-    @Override
-    public List<Operator> getChildOperators() {
-      return Collections.emptyList();
     }
   }
 
-  public enum PredicateEvaluationResult {
-    TRUE, NULL, FALSE
+  private void processRawSingleValue(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult, TransformResultMetadata resultMetadata) {
+    switch (resultMetadata.getDataType().getStoredType()) {
+      case INT:
+        processIntValues(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+        break;
+      case LONG:
+        processLongValues(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+        break;
+      case FLOAT:
+        processFloatValues(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+        break;
+      case DOUBLE:
+        processDoubleValues(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+        break;
+      case STRING:
+        processStringValues(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+        break;
+      case BYTES:
+        processBytesValues(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+        break;
+      case BIG_DECIMAL:
+        processBigDecimalValues(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+        break;
+      default:
+        throw new IllegalStateException();
+    }
   }
-}
+
+  private void processDictionaryEncodedMultiValue(ProjectionBlock projectionBlock,
+      BitmapDataProvider matchingDocIds, int numDocs, boolean predicateEvaluationResult) {
+    int[][] dictIdsArray = _transformFunction.transformToDictIdsMV(projectionBlock);
+    for (int i = 0; i < numDocs; i++) {
+      int[] dictIds = dictIdsArray[i];
+      int numDictIds = dictIds.length;
+      _numEntriesScanned += numDictIds;
+      if (_predicateEvaluator.applyMV(dictIds, numDictIds) == predicateEvaluationResult) {
+        matchingDocIds.add(_docIdBuffer[i]);
+      }
+    }
+  }
+
+  private void processRawMultiValue(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult, TransformResultMetadata resultMetadata) {
+    switch (resultMetadata.getDataType().getStoredType()) {
+      case INT:
+        processIntValuesMV(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+        break;
+      case LONG:
+        processLongValuesMV(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+        break;
+      case FLOAT:
+        processFloatValuesMV(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+        break;
+      case DOUBLE:
+        processDoubleValuesMV(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+        break;
+      case STRING:
+        processStringValuesMV(projectionBlock, matchingDocIds, numDocs, predicateEvaluationResult);
+        break;
+      default:
+        throw new IllegalStateException();
+    }
+  }
+
+  private void processIntValues(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult) {
+    int[] intValues = _transformFunction.transformToIntValuesSV(projectionBlock);
+    RoaringBitmap nullBitmap = null;
+    if (_nullHandlingEnabled) {
+      nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
+    }
+    applyPredicate(matchingDocIds, numDocs, predicateEvaluationResult, intValues, nullBitmap);
+  }
+
+  private void processLongValues(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult) {
+    long[] longValues = _transformFunction.transformToLongValuesSV(projectionBlock);
+    RoaringBitmap nullBitmap = null;
+    if (_nullHandlingEnabled) {
+      nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
+    }
+    applyPredicate(matchingDocIds, numDocs, predicateEvaluationResult, longValues, nullBitmap);
+  }
+
+  private void processFloatValues(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult) {
+    float[] floatValues = _transformFunction.transformToFloatValuesSV(projectionBlock);
+    RoaringBitmap nullBitmap = null;
+    if (_nullHandlingEnabled) {
+      nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
+    }
+    applyPredicate(matchingDocIds, numDocs, predicateEvaluationResult, floatValues, nullBitmap);
+  }
+
+  private void processDoubleValues(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult) {
+    double[] doubleValues = _transformFunction.transformToDoubleValuesSV(projectionBlock);
+    RoaringBitmap nullBitmap = null;
+    if (_nullHandlingEnabled) {
+      nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
+    }
+    applyPredicate(matchingDocIds, numDocs, predicateEvaluationResult, doubleValues, nullBitmap);
+  }
+
+  private void processStringValues(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult) {
+    String[] stringValues = _transformFunction.transformToStringValuesSV(projectionBlock);
+    RoaringBitmap nullBitmap = null;
+    if (_nullHandlingEnabled) {
+      nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
+    }
+    applyPredicate(matchingDocIds, numDocs, predicateEvaluationResult, stringValues, nullBitmap);
+  }
+
+  private void processBytesValues(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult) {
+    byte[][] bytesValues = _transformFunction.transformToBytesValuesSV(projectionBlock);
+    RoaringBitmap nullBitmap = null;
+    if (_nullHandlingEnabled) {
+      nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
+    }
+    applyPredicate(matchingDocIds, numDocs, predicateEvaluationResult, bytesValues, nullBitmap);
+  }
+
+  private void processBigDecimalValues(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds,
+      int numDocs, boolean predicateEvaluationResult) {
+    BigDecimal[] bigDecimalValues = _transformFunction.transformToBigDecimalValuesSV(projectionBlock);
+    RoaringBitmap nullBitmap = null;
+    if (_nullHandlingEnabled) {
+      nullBitmap = _transformFunction.getNullBitmap(projectionBlock);
+    }
+    applyPredicate(matchingDocIds, numDocs, predicateEvaluationResult, bigDecimalValues, nullBitmap);
+  }
+
+  private void processIntValuesMV(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult) {
+    int[][] intValuesArray = _transformFunction.transformToIntValuesMV(projectionBlock);
+    for (int i = 0; i < numDocs; i++) {
+      int[] values = intValuesArray[i];
+      int numValues = values.length;
+      _numEntriesScanned += numValues;
+      if (_predicateEvaluator.applyMV(values, numValues) == predicateEvaluationResult) {
+        matchingDocIds.add(_docIdBuffer[i]);
+      }
+    }
+  }
+
+  private void processLongValuesMV(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult) {
+    long[][] longValuesArray = _transformFunction.transformToLongValuesMV(projectionBlock);
+    for (int i = 0; i < numDocs; i++) {
+      long[] values = longValuesArray[i];
+      int numValues = values.length;
+      _numEntriesScanned += numValues;
+      if (_predicateEvaluator.applyMV(values, numValues) == predicateEvaluationResult) {
+        matchingDocIds.add(_docIdBuffer[i]);
+      }
+    }
+  }
+
+  private void processFloatValuesMV(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult) {
+    float[][] floatValuesArray = _transformFunction.transformToFloatValuesMV(projectionBlock);
+    for (int i = 0; i < numDocs; i++) {
+      float[] values = floatValuesArray[i];
+      int numValues = values.length;
+      _numEntriesScanned += numValues;
+      if (_predicateEvaluator.applyMV(values, numValues) == predicateEvaluationResult) {
+        matchingDocIds.add(_docIdBuffer[i]);
+      }
+    }
+  }
+
+  private void processDoubleValuesMV(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult) {
+    double[][] doubleValuesArray = _transformFunction.transformToDoubleValuesMV(projectionBlock);
+    for (int i = 0; i < numDocs; i++) {
+      double[] values = doubleValuesArray[i];
+      int numValues = values.length;
+      _numEntriesScanned += numValues;
+      if (_predicateEvaluator.applyMV(values, numValues) == predicateEvaluationResult) {
+        matchingDocIds.add(_docIdBuffer[i]);
+      }
+    }
+  }
+
+  private void processStringValuesMV(ProjectionBlock projectionBlock, BitmapDataProvider matchingDocIds, int numDocs,
+      boolean predicateEvaluationResult) {
+    String[][] valuesArray = _transformFunction.transformToStringValuesMV(projectionBlock);
+    for (int i = 0; i < numDocs; i++) {
+      String[] values = valuesArray[i];
+      int numValues = values.length;
+      _numEntriesScanned += numValues;
+      if (_predicateEvaluator.applyMV(values, numValues) == predicateEvaluationResult) {
+        matchingDocIds.add(_docIdBuffer[i]);
+      }
+    }
+  }
+
+
+  private void applyPredicate(BitmapDataProvider matchingDocIds, int numDocs, boolean predicateEvaluationResult,
+      int[] values, RoaringBitmap nullBitmap) {
+    if (nullBitmap != null && !nullBitmap.isEmpty()) {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult && !nullBitmap.contains(i)) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    } else {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    }
+  }
+
+  private void applyPredicate(BitmapDataProvider matchingDocIds, int numDocs, boolean predicateEvaluationResult,
+      long[] values, RoaringBitmap nullBitmap) {
+    if (nullBitmap != null && !nullBitmap.isEmpty()) {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult && !nullBitmap.contains(i)) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    } else {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    }
+  }
+
+  private void applyPredicate(BitmapDataProvider matchingDocIds, int numDocs, boolean predicateEvaluationResult,
+      float[] values, RoaringBitmap nullBitmap) {
+    if (nullBitmap != null && !nullBitmap.isEmpty()) {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult && !nullBitmap.contains(i)) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    } else {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    }
+  }
+
+  private void applyPredicate(BitmapDataProvider matchingDocIds, int numDocs, boolean predicateEvaluationResult,
+      double[] values, RoaringBitmap nullBitmap) {
+    if (nullBitmap != null && !nullBitmap.isEmpty()) {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult && !nullBitmap.contains(i)) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    } else {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    }
+  }
+
+  private void applyPredicate(BitmapDataProvider matchingDocIds, int numDocs, boolean predicateEvaluationResult,
+      String[] values, RoaringBitmap nullBitmap) {
+    if (nullBitmap != null && !nullBitmap.isEmpty()) {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult && !nullBitmap.contains(i)) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    } else {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    }
+  }
+
+  private void applyPredicate(BitmapDataProvider matchingDocIds, int numDocs, boolean predicateEvaluationResult,
+      byte[][] values, RoaringBitmap nullBitmap) {
+    if (nullBitmap != null && !nullBitmap.isEmpty()) {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult && !nullBitmap.contains(i)) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    } else {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    }
+  }
+
+  private void applyPredicate(BitmapDataProvider matchingDocIds, int numDocs, boolean predicateEvaluationResult,
+      BigDecimal[] values, RoaringBitmap nullBitmap) {
+    if (nullBitmap != null && !nullBitmap.isEmpty()) {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult && !nullBitmap.contains(i)) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    } else {
+      for (int i = 0; i < numDocs; i++) {
+        if (_predicateEvaluator.applySV(values[i]) == predicateEvaluationResult) {
+          matchingDocIds.add(_docIdBuffer[i]);
+        }
+      }
+    }
+  }
+//Refactoring end

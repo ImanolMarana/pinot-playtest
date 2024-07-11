@@ -273,85 +273,9 @@ public class LeafStageTransferableBlockOperator extends MultiStageOperator {
     return _executorService.submit(() -> {
       try {
         if (_requests.size() == 1) {
-          ServerQueryRequest request = _requests.get(0);
-          InstanceResponseBlock instanceResponseBlock =
-              _queryExecutor.execute(request, _executorService, resultsBlockConsumer);
-          if (queryLogger != null) {
-            queryLogger.logQuery(request, instanceResponseBlock, "MultistageEngine");
-          }
-          // TODO: Revisit if we should treat all exceptions as query failure. Currently MERGE_RESPONSE_ERROR and
-          //       SERVER_SEGMENT_MISSING_ERROR are counted as query failure.
-          Map<Integer, String> exceptions = instanceResponseBlock.getExceptions();
-          if (!exceptions.isEmpty()) {
-            _exceptions = exceptions;
-          } else {
-            // NOTE: Instance response block might contain data (not metadata only) when all the segments are pruned.
-            //       Add the results block if it contains data.
-            BaseResultsBlock resultsBlock = instanceResponseBlock.getResultsBlock();
-            if (resultsBlock != null && resultsBlock.getNumRows() > 0) {
-              addResultsBlock(resultsBlock);
-            }
-            // Collect the execution stats
-            mergeExecutionStats(instanceResponseBlock.getResponseMetadata());
-          }
+          handleSingleRequest(resultsBlockConsumer, queryLogger);
         } else {
-          assert _requests.size() == 2;
-          Future<Map<String, String>>[] futures = new Future[2];
-          // TODO: this latch mechanism is not the most elegant. We should change it to use a CompletionService.
-          //  In order to interrupt the execution in case of error, we could different mechanisms like throwing in the
-          //  future, or using a shared volatile variable.
-          CountDownLatch latch = new CountDownLatch(2);
-          for (int i = 0; i < 2; i++) {
-            ServerQueryRequest request = _requests.get(i);
-            futures[i] = _executorService.submit(() -> {
-              try {
-                InstanceResponseBlock instanceResponseBlock =
-                    _queryExecutor.execute(request, _executorService, resultsBlockConsumer);
-                if (queryLogger != null) {
-                  queryLogger.logQuery(request, instanceResponseBlock, "MultistageEngine");
-                }
-                Map<Integer, String> exceptions = instanceResponseBlock.getExceptions();
-                if (!exceptions.isEmpty()) {
-                  // Drain the latch when receiving exception block and not wait for the other thread to finish
-                  _exceptions = exceptions;
-                  latch.countDown();
-                  return Collections.emptyMap();
-                } else {
-                  // NOTE: Instance response block might contain data (not metadata only) when all the segments are
-                  //       pruned. Add the results block if it contains data.
-                  BaseResultsBlock resultsBlock = instanceResponseBlock.getResultsBlock();
-                  if (resultsBlock != null && resultsBlock.getNumRows() > 0) {
-                    addResultsBlock(resultsBlock);
-                  }
-                  // Collect the execution stats
-                  return instanceResponseBlock.getResponseMetadata();
-                }
-              } finally {
-                latch.countDown();
-              }
-            });
-          }
-          try {
-            if (!latch.await(_context.getDeadlineMs() - System.currentTimeMillis(), TimeUnit.MILLISECONDS)) {
-              throw new TimeoutException("Timed out waiting for leaf stage to finish");
-            }
-            // Propagate the exception thrown by the leaf stage
-            for (Future<Map<String, String>> future : futures) {
-              Map<String, String> stats =
-                  future.get(_context.getDeadlineMs() - System.currentTimeMillis(), TimeUnit.MILLISECONDS);
-              mergeExecutionStats(stats);
-            }
-          } catch (TimeoutException e) {
-            // Cancel all the futures and throw the exception
-            for (Future<?> future : futures) {
-              future.cancel(true);
-            }
-            throw new TimeoutException("Timed out waiting for leaf stage to finish");
-          } finally {
-            for (Future<?> future : futures) {
-              future.cancel(true);
-            }
-          }
+          handleMultipleRequests(resultsBlockConsumer, queryLogger);
         }
         return null;
       } finally {
@@ -360,6 +284,89 @@ public class LeafStageTransferableBlockOperator extends MultiStageOperator {
       }
     });
   }
+
+  private void handleSingleRequest(ResultsBlockConsumer resultsBlockConsumer, ServerQueryLogger queryLogger) {
+    ServerQueryRequest request = _requests.get(0);
+    InstanceResponseBlock instanceResponseBlock =
+        _queryExecutor.execute(request, _executorService, resultsBlockConsumer);
+    if (queryLogger != null) {
+      queryLogger.logQuery(request, instanceResponseBlock, "MultistageEngine");
+    }
+    processInstanceResponseBlock(instanceResponseBlock);
+  }
+
+  private void handleMultipleRequests(ResultsBlockConsumer resultsBlockConsumer, ServerQueryLogger queryLogger) {
+    assert _requests.size() == 2;
+    Future<Map<String, String>>[] futures = new Future[2];
+    // TODO: this latch mechanism is not the most elegant. We should change it to use a CompletionService.
+    //  In order to interrupt the execution in case of error, we could different mechanisms like throwing in the
+    //  future, or using a shared volatile variable.
+    CountDownLatch latch = new CountDownLatch(2);
+    for (int i = 0; i < 2; i++) {
+      futures[i] = submitRequest(resultsBlockConsumer, queryLogger, latch, i);
+    }
+    awaitLatchAndProcessFutures(futures, latch);
+  }
+
+  private Future<Map<String, String>> submitRequest(ResultsBlockConsumer resultsBlockConsumer,
+      ServerQueryLogger queryLogger, CountDownLatch latch, int i) {
+    ServerQueryRequest request = _requests.get(i);
+    return _executorService.submit(() -> {
+      try {
+        InstanceResponseBlock instanceResponseBlock =
+            _queryExecutor.execute(request, _executorService, resultsBlockConsumer);
+        if (queryLogger != null) {
+          queryLogger.logQuery(request, instanceResponseBlock, "MultistageEngine");
+        }
+        return processInstanceResponseBlock(instanceResponseBlock);
+      } finally {
+        latch.countDown();
+      }
+    });
+  }
+
+  private void awaitLatchAndProcessFutures(Future<Map<String, String>>[] futures, CountDownLatch latch) {
+    try {
+      if (!latch.await(_context.getDeadlineMs() - System.currentTimeMillis(), TimeUnit.MILLISECONDS)) {
+        throw new TimeoutException("Timed out waiting for leaf stage to finish");
+      }
+      // Propagate the exception thrown by the leaf stage
+      for (Future<Map<String, String>> future : futures) {
+        Map<String, String> stats =
+            future.get(_context.getDeadlineMs() - System.currentTimeMillis(), TimeUnit.MILLISECONDS);
+        mergeExecutionStats(stats);
+      }
+    } catch (TimeoutException e) {
+      // Cancel all the futures and throw the exception
+      for (Future<?> future : futures) {
+        future.cancel(true);
+      }
+      throw new TimeoutException("Timed out waiting for leaf stage to finish");
+    } finally {
+      for (Future<?> future : futures) {
+        future.cancel(true);
+      }
+    }
+  }
+
+  private Map<String, String> processInstanceResponseBlock(InstanceResponseBlock instanceResponseBlock) {
+    Map<Integer, String> exceptions = instanceResponseBlock.getExceptions();
+    if (!exceptions.isEmpty()) {
+      // Drain the latch when receiving exception block and not wait for the other thread to finish
+      _exceptions = exceptions;
+      return Collections.emptyMap();
+    } else {
+      // NOTE: Instance response block might contain data (not metadata only) when all the segments are
+      //       pruned. Add the results block if it contains data.
+      BaseResultsBlock resultsBlock = instanceResponseBlock.getResultsBlock();
+      if (resultsBlock != null && resultsBlock.getNumRows() > 0) {
+        addResultsBlock(resultsBlock);
+      }
+      // Collect the execution stats
+      return instanceResponseBlock.getResponseMetadata();
+    }
+  }
+//Refactoring end
 
   @VisibleForTesting
   void addResultsBlock(BaseResultsBlock resultsBlock)

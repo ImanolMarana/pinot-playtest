@@ -73,85 +73,99 @@ public class NotInPredicateEvaluatorFactory {
    */
   public static NotInRawPredicateEvaluator newRawValueBasedEvaluator(NotInPredicate notInPredicate, DataType dataType) {
     switch (dataType) {
-      case INT: {
-        int[] intValues = notInPredicate.getIntValues();
-        IntSet nonMatchingValues = new IntOpenHashSet(HashUtil.getMinHashSetSize(intValues.length));
-        for (int value : intValues) {
-          nonMatchingValues.add(value);
-        }
-        return new IntRawValueBasedNotInPredicateEvaluator(notInPredicate, nonMatchingValues);
-      }
-      case LONG: {
-        long[] longValues = notInPredicate.getLongValues();
-        LongSet nonMatchingValues = new LongOpenHashSet(HashUtil.getMinHashSetSize(longValues.length));
-        for (long value : longValues) {
-          nonMatchingValues.add(value);
-        }
-        return new LongRawValueBasedNotInPredicateEvaluator(notInPredicate, nonMatchingValues);
-      }
-      case FLOAT: {
-        float[] floatValues = notInPredicate.getFloatValues();
-        FloatSet nonMatchingValues = new FloatOpenHashSet(HashUtil.getMinHashSetSize(floatValues.length));
-        for (float value : floatValues) {
-          nonMatchingValues.add(value);
-        }
-        return new FloatRawValueBasedNotInPredicateEvaluator(notInPredicate, nonMatchingValues);
-      }
-      case DOUBLE: {
-        double[] doubleValues = notInPredicate.getDoubleValues();
-        DoubleSet nonMatchingValues = new DoubleOpenHashSet(HashUtil.getMinHashSetSize(doubleValues.length));
-        for (double value : doubleValues) {
-          nonMatchingValues.add(value);
-        }
-        return new DoubleRawValueBasedNotInPredicateEvaluator(notInPredicate, nonMatchingValues);
-      }
-      case BIG_DECIMAL: {
-        BigDecimal[] bigDecimalValues = notInPredicate.getBigDecimalValues();
-        // NOTE: Use TreeSet because BigDecimal's compareTo() is not consistent with equals()
-        //       E.g. compareTo(3.0, 3) returns 0 but equals(3.0, 3) returns false
-        TreeSet<BigDecimal> nonMatchingValues = new TreeSet<>(Arrays.asList(bigDecimalValues));
-        return new BigDecimalRawValueBasedNotInPredicateEvaluator(notInPredicate, nonMatchingValues);
-      }
-      case BOOLEAN: {
-        int[] booleanValues = notInPredicate.getBooleanValues();
-        IntSet nonMatchingValues = new IntOpenHashSet(HashUtil.getMinHashSetSize(booleanValues.length));
-        for (int value : booleanValues) {
-          nonMatchingValues.add(value);
-        }
-        return new IntRawValueBasedNotInPredicateEvaluator(notInPredicate, nonMatchingValues);
-      }
-      case TIMESTAMP: {
-        long[] timestampValues = notInPredicate.getTimestampValues();
-        LongSet nonMatchingValues = new LongOpenHashSet(HashUtil.getMinHashSetSize(timestampValues.length));
-        for (long value : timestampValues) {
-          nonMatchingValues.add(value);
-        }
-        return new LongRawValueBasedNotInPredicateEvaluator(notInPredicate, nonMatchingValues);
-      }
-      case STRING: {
-        List<String> stringValues = notInPredicate.getValues();
-        Set<String> nonMatchingValues = new ObjectOpenHashSet<>(HashUtil.getMinHashSetSize(stringValues.size()));
-        // NOTE: Add value-by-value to avoid overhead
-        for (String value : stringValues) {
-          //noinspection UseBulkOperation
-          nonMatchingValues.add(value);
-        }
-        return new StringRawValueBasedNotInPredicateEvaluator(notInPredicate, nonMatchingValues);
-      }
-      case BYTES: {
-        ByteArray[] bytesValues = notInPredicate.getBytesValues();
-        Set<ByteArray> nonMatchingValues = new ObjectOpenHashSet<>(HashUtil.getMinHashSetSize(bytesValues.length));
-        // NOTE: Add value-by-value to avoid overhead
-        //noinspection ManualArrayToCollectionCopy
-        for (ByteArray value : bytesValues) {
-          //noinspection UseBulkOperation
-          nonMatchingValues.add(value);
-        }
-        return new BytesRawValueBasedNotInPredicateEvaluator(notInPredicate, nonMatchingValues);
-      }
+      case INT:
+      case BOOLEAN:
+        return new IntRawValueBasedNotInPredicateEvaluator(notInPredicate, getNonMatchingIntValues(notInPredicate));
+      case LONG:
+      case TIMESTAMP:
+        return new LongRawValueBasedNotInPredicateEvaluator(notInPredicate, getNonMatchingLongValues(notInPredicate));
+      case FLOAT:
+        return new FloatRawValueBasedNotInPredicateEvaluator(notInPredicate,
+            getNonMatchingFloatValues(notInPredicate));
+      case DOUBLE:
+        return new DoubleRawValueBasedNotInPredicateEvaluator(notInPredicate,
+            getNonMatchingDoubleValues(notInPredicate));
+      case BIG_DECIMAL:
+        return new BigDecimalRawValueBasedNotInPredicateEvaluator(notInPredicate,
+            getNonMatchingBigDecimalValues(notInPredicate));
+      case STRING:
+        return new StringRawValueBasedNotInPredicateEvaluator(notInPredicate,
+            getNonMatchingStringValues(notInPredicate));
+      case BYTES:
+        return new BytesRawValueBasedNotInPredicateEvaluator(notInPredicate,
+            getNonMatchingBytesValues(notInPredicate));
       default:
         throw new IllegalStateException("Unsupported data type: " + dataType);
     }
+  }
+
+  private static IntSet getNonMatchingIntValues(NotInPredicate notInPredicate) {
+    int[] intValues = notInPredicate.getIntValues();
+    IntSet nonMatchingValues = new IntOpenHashSet(HashUtil.getMinHashSetSize(intValues.length));
+    for (int value : intValues) {
+      nonMatchingValues.add(value);
+    }
+    return nonMatchingValues;
+  }
+
+  private static LongSet getNonMatchingLongValues(NotInPredicate notInPredicate) {
+    long[] longValues = notInPredicate.getLongValues();
+    LongSet nonMatchingValues = new LongOpenHashSet(HashUtil.getMinHashSetSize(longValues.length));
+    for (long value : longValues) {
+      nonMatchingValues.add(value);
+    }
+    return nonMatchingValues;
+  }
+
+  private static FloatSet getNonMatchingFloatValues(NotInPredicate notInPredicate) {
+    float[] floatValues = notInPredicate.getFloatValues();
+    FloatSet nonMatchingValues = new FloatOpenHashSet(HashUtil.getMinHashSetSize(floatValues.length));
+    for (float value : floatValues) {
+      nonMatchingValues.add(value);
+    }
+    return nonMatchingValues;
+  }
+
+  private static DoubleSet getNonMatchingDoubleValues(NotInPredicate notInPredicate) {
+    double[] doubleValues = notInPredicate.getDoubleValues();
+    DoubleSet nonMatchingValues = new DoubleOpenHashSet(HashUtil.getMinHashSetSize(doubleValues.length));
+    for (double value : doubleValues) {
+      nonMatchingValues.add(value);
+    }
+    return nonMatchingValues;
+  }
+
+  private static TreeSet<BigDecimal> getNonMatchingBigDecimalValues(NotInPredicate notInPredicate) {
+    BigDecimal[] bigDecimalValues = notInPredicate.getBigDecimalValues();
+    // NOTE: Use TreeSet because BigDecimal's compareTo() is not consistent with equals()
+    //       E.g. compareTo(3.0, 3) returns 0 but equals(3.0, 3) returns false
+    return new TreeSet<>(Arrays.asList(bigDecimalValues));
+  }
+
+  private static Set<String> getNonMatchingStringValues(NotInPredicate notInPredicate) {
+    List<String> stringValues = notInPredicate.getValues();
+    Set<String> nonMatchingValues = new ObjectOpenHashSet<>(HashUtil.getMinHashSetSize(stringValues.size()));
+    // NOTE: Add value-by-value to avoid overhead
+    for (String value : stringValues) {
+      //noinspection UseBulkOperation
+      nonMatchingValues.add(value);
+    }
+    return nonMatchingValues;
+  }
+
+  private static Set<ByteArray> getNonMatchingBytesValues(NotInPredicate notInPredicate) {
+    ByteArray[] bytesValues = notInPredicate.getBytesValues();
+    Set<ByteArray> nonMatchingValues = new ObjectOpenHashSet<>(HashUtil.getMinHashSetSize(bytesValues.length));
+    // NOTE: Add value-by-value to avoid overhead
+    //noinspection ManualArrayToCollectionCopy
+    for (ByteArray value : bytesValues) {
+      //noinspection UseBulkOperation
+      nonMatchingValues.add(value);
+    }
+    return nonMatchingValues;
+  }
+
+//Refactoring end
   }
 
   public static final class DictionaryBasedNotInPredicateEvaluator extends BaseDictionaryBasedPredicateEvaluator {

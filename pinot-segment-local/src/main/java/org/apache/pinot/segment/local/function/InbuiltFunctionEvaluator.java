@@ -62,8 +62,54 @@ public class InbuiltFunctionEvaluator implements FunctionEvaluator {
         _arguments.add(columnName);
         return columnExecutionNode;
       case FUNCTION:
-        FunctionContext function = expression.getFunction();
-        List<ExpressionContext> arguments = function.getArguments();
+        return planFunctionExecution(expression.getFunction());
+      default:
+        throw new IllegalStateException();
+    }
+  }
+
+  private ExecutableNode planFunctionExecution(FunctionContext function) {
+    List<ExpressionContext> arguments = function.getArguments();
+    int numArguments = arguments.size();
+    ExecutableNode[] childNodes = new ExecutableNode[numArguments];
+    for (int i = 0; i < numArguments; i++) {
+      childNodes[i] = planExecution(arguments.get(i));
+    }
+    String functionName = function.getFunctionName();
+    switch (functionName) {
+      case "and":
+        return new AndExecutionNode(childNodes);
+      case "or":
+        return new OrExecutionNode(childNodes);
+      case "not":
+        Preconditions.checkState(numArguments == 1, "NOT function expects 1 argument, got: %s", numArguments);
+        return new NotExecutionNode(childNodes[0]);
+      case "arrayvalueconstructor":
+        Object[] values = new Object[numArguments];
+        int i = 0;
+        for (ExpressionContext literal : arguments) {
+          values[i++] = literal.getLiteral().getValue();
+        }
+        return new ArrayConstantExecutionNode(values);
+      default:
+        return createFunctionExecutionNode(functionName, numArguments, childNodes);
+    }
+  }
+
+  private ExecutableNode createFunctionExecutionNode(String functionName, int numArguments, ExecutableNode[] childNodes) {
+    FunctionInfo functionInfo = FunctionRegistry.getFunctionInfo(functionName, numArguments);
+    if (functionInfo == null) {
+      if (FunctionRegistry.containsFunction(functionName)) {
+        throw new IllegalStateException(
+            String.format("Unsupported function: %s with %d parameters", functionName, numArguments));
+      } else {
+        throw new IllegalStateException(
+            String.format("Unsupported function: %s not found", functionName));
+      }
+    }
+    return new FunctionExecutionNode(functionInfo, childNodes);
+  }
+//Refactoring end
         int numArguments = arguments.size();
         ExecutableNode[] childNodes = new ExecutableNode[numArguments];
         for (int i = 0; i < numArguments; i++) {

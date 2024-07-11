@@ -77,13 +77,76 @@ public class InIdSetTransformFunction extends BaseTransformFunction {
     int length = valueBlock.getNumDocs();
     initIntValuesSV(length);
     DataType storedType = _transformFunction.getResultMetadata().getDataType().getStoredType();
+    return calculateIntValues(valueBlock, length, storedType);
+  }
+  
+  private int[] calculateIntValues(ValueBlock valueBlock, int length, DataType storedType) {
     switch (storedType) {
       case INT:
-        int[] intValues = _transformFunction.transformToIntValuesSV(valueBlock);
-        for (int i = 0; i < length; i++) {
-          _intValuesSV[i] = _idSet.contains(intValues[i]) ? 1 : 0;
-        }
-        break;
+        return calculateIntValuesFromInt(valueBlock, length);
+      case LONG:
+        return calculateIntValuesFromLong(valueBlock, length);
+      case FLOAT:
+        return calculateIntValuesFromFloat(valueBlock, length);
+      case DOUBLE:
+        return calculateIntValuesFromDouble(valueBlock, length);
+      case STRING:
+        return calculateIntValuesFromString(valueBlock, length);
+      case BYTES:
+        return calculateIntValuesFromBytes(valueBlock, length);
+      default:
+        throw new IllegalStateException();
+    }
+  }
+
+  private int[] calculateIntValuesFromInt(ValueBlock valueBlock, int length) {
+    int[] intValues = _transformFunction.transformToIntValuesSV(valueBlock);
+    for (int i = 0; i < length; i++) {
+      _intValuesSV[i] = _idSet.contains(intValues[i]) ? 1 : 0;
+    }
+    return _intValuesSV;
+  }
+
+  private int[] calculateIntValuesFromLong(ValueBlock valueBlock, int length) {
+    long[] longValues = _transformFunction.transformToLongValuesSV(valueBlock);
+    for (int i = 0; i < length; i++) {
+      _intValuesSV[i] = _idSet.contains(longValues[i]) ? 1 : 0;
+    }
+    return _intValuesSV;
+  }
+
+  private int[] calculateIntValuesFromFloat(ValueBlock valueBlock, int length) {
+    float[] floatValues = _transformFunction.transformToFloatValuesSV(valueBlock);
+    for (int i = 0; i < length; i++) {
+      _intValuesSV[i] = _idSet.contains(floatValues[i]) ? 1 : 0;
+    }
+    return _intValuesSV;
+  }
+
+  private int[] calculateIntValuesFromDouble(ValueBlock valueBlock, int length) {
+    double[] doubleValues = _transformFunction.transformToDoubleValuesSV(valueBlock);
+    for (int i = 0; i < length; i++) {
+      _intValuesSV[i] = _idSet.contains(doubleValues[i]) ? 1 : 0;
+    }
+    return _intValuesSV;
+  }
+
+  private int[] calculateIntValuesFromString(ValueBlock valueBlock, int length) {
+    String[] stringValues = _transformFunction.transformToStringValuesSV(valueBlock);
+    for (int i = 0; i < length; i++) {
+      _intValuesSV[i] = _idSet.contains(stringValues[i]) ? 1 : 0;
+    }
+    return _intValuesSV;
+  }
+
+  private int[] calculateIntValuesFromBytes(ValueBlock valueBlock, int length) {
+    byte[][] bytesValues = _transformFunction.transformToBytesValuesSV(valueBlock);
+    for (int i = 0; i < length; i++) {
+      _intValuesSV[i] = _idSet.contains(bytesValues[i]) ? 1 : 0;
+    }
+    return _intValuesSV;
+  }
+//Refactoring end
       case LONG:
         long[] longValues = _transformFunction.transformToLongValuesSV(valueBlock);
         for (int i = 0; i < length; i++) {

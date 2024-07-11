@@ -937,49 +937,59 @@ public class MergeRollupTaskGenerator extends BaseTaskGenerator {
    * @param tableConfigs list of tables
    */
   private void cleanUpDelayMetrics(List<TableConfig> tableConfigs) {
-    Map<String, TableConfig> tableConfigMap = new HashMap<>();
-    for (TableConfig tableConfig : tableConfigs) {
-      tableConfigMap.put(tableConfig.getTableName(), tableConfig);
-    }
-
-    Set<String> tables = new HashSet<>(_mergeRollupWatermarks.keySet());
-    tables.addAll(_tableNumberBucketsToProcess.keySet());
-
-    for (String tableNameWithType : tables) {
-      TableConfig currentTableConfig = tableConfigMap.get(tableNameWithType);
-      // Table does not exist in the cluster or merge task config is removed
-      if (currentTableConfig == null) {
-        resetDelayMetrics(tableNameWithType);
-        continue;
+        Map<String, TableConfig> tableConfigMap = tableConfigs.stream()
+            .collect(Collectors.toMap(TableConfig::getTableName, Function.identity()));
+    
+        Set<String> tables = new HashSet<>(_mergeRollupWatermarks.keySet());
+        tables.addAll(_tableNumberBucketsToProcess.keySet());
+    
+        for (String tableNameWithType : tables) {
+          cleanUpDelayMetricsForTable(tableNameWithType, tableConfigMap);
+        }
       }
-
-      // The current controller is no longer leader for this table
-      if (!_clusterInfoAccessor.getLeaderControllerManager().isLeaderForTable(tableNameWithType)) {
-        resetDelayMetrics(tableNameWithType);
-        continue;
+    
+      private void cleanUpDelayMetricsForTable(String tableNameWithType, Map<String, TableConfig> tableConfigMap) {
+        TableConfig currentTableConfig = tableConfigMap.get(tableNameWithType);
+        // Table does not exist in the cluster or merge task config is removed
+        if (currentTableConfig == null) {
+          resetDelayMetrics(tableNameWithType);
+          return;
+        }
+    
+        // The current controller is no longer leader for this table
+        if (!_clusterInfoAccessor.getLeaderControllerManager().isLeaderForTable(tableNameWithType)) {
+          resetDelayMetrics(tableNameWithType);
+          return;
+        }
+    
+        // Task config is modified and some merge level got removed
+        Map<String, String> taskConfigs = currentTableConfig.getTaskConfig().getConfigsForTaskType(getTaskType());
+        Map<String, Map<String, String>> mergeLevelToConfigs = MergeRollupTaskUtils.getLevelToConfigMap(taskConfigs);
+    
+        cleanUpMetricsForMergeLevel(tableNameWithType, mergeLevelToConfigs);
       }
-
-      // Task config is modified and some merge level got removed
-      Map<String, String> taskConfigs = currentTableConfig.getTaskConfig().getConfigsForTaskType(getTaskType());
-      Map<String, Map<String, String>> mergeLevelToConfigs = MergeRollupTaskUtils.getLevelToConfigMap(taskConfigs);
-      Map<String, Long> tableToWatermark = _mergeRollupWatermarks.get(tableNameWithType);
-      if (tableToWatermark != null) {
-        for (String mergeLevel : tableToWatermark.keySet()) {
-          if (!mergeLevelToConfigs.containsKey(mergeLevel)) {
-            resetDelayMetrics(tableNameWithType, mergeLevel);
+    
+      private void cleanUpMetricsForMergeLevel(String tableNameWithType,
+          Map<String, Map<String, String>> mergeLevelToConfigs) {
+        Map<String, Long> tableToWatermark = _mergeRollupWatermarks.get(tableNameWithType);
+        if (tableToWatermark != null) {
+          for (String mergeLevel : tableToWatermark.keySet()) {
+            if (!mergeLevelToConfigs.containsKey(mergeLevel)) {
+              resetDelayMetrics(tableNameWithType, mergeLevel);
+            }
+          }
+        }
+    
+        Map<String, Long> tableToNumBucketsToProcess = _tableNumberBucketsToProcess.get(tableNameWithType);
+        if (tableToNumBucketsToProcess != null) {
+          for (String mergeLevel : tableToNumBucketsToProcess.keySet()) {
+            if (!mergeLevelToConfigs.containsKey(mergeLevel)) {
+              resetDelayMetrics(tableNameWithType, mergeLevel);
+            }
           }
         }
       }
-
-      Map<String, Long> tableToNumBucketsToProcess = _tableNumberBucketsToProcess.get(tableNameWithType);
-      if (tableToNumBucketsToProcess != null) {
-        for (String mergeLevel : tableToNumBucketsToProcess.keySet()) {
-          if (!mergeLevelToConfigs.containsKey(mergeLevel)) {
-            resetDelayMetrics(tableNameWithType, mergeLevel);
-          }
-        }
-      }
-    }
+//Refactoring end
   }
 
   private String getMetricNameForTaskDelay(String tableNameWithType, String mergeLevel) {

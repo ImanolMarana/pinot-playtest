@@ -261,36 +261,49 @@ public class FunnelMaxStepAggregationFunction implements AggregationFunction<Pri
     long previousTimestamp = -1;
     for (FunnelStepEvent event : slidingWindow) {
       int currentEventStep = event.getStep();
-      // If the same condition holds for the sequence of events, then such repeating event interrupts further
-      // processing.
-      if (_modes.hasStrictDeduplication()) {
-        if (currentEventStep == maxStep - 1) {
-          return maxStep;
-        }
+
+      if (shouldStopProcessing(maxStep, currentEventStep)) {
+        return maxStep;
       }
-      // Don't allow interventions of other events. E.g. in the case of A->B->D->C, it stops finding A->B->C at the D
-      // and the max event level is 2.
-      if (_modes.hasStrictOrder()) {
-        if (currentEventStep != maxStep) {
-          return maxStep;
-        }
-      }
+
       // Apply conditions only to events with strictly increasing timestamps.
-      if (_modes.hasStrictIncrease()) {
-        if (previousTimestamp == event.getTimestamp()) {
-          continue;
-        }
+      if (shouldSkipEvent(event.getTimestamp(), previousTimestamp)) {
+        continue;
       }
+
       previousTimestamp = event.getTimestamp();
-      if (maxStep == currentEventStep) {
-        maxStep++;
-      }
+      maxStep = updateMaxStep(maxStep, currentEventStep);
+
       if (maxStep == _numSteps) {
         break;
       }
     }
     return maxStep;
   }
+
+  private boolean shouldStopProcessing(int maxStep, int currentEventStep) {
+    // If the same condition holds for the sequence of events, then such repeating event interrupts further
+    // processing.
+    if (_modes.hasStrictDeduplication() && currentEventStep == maxStep - 1) {
+      return true;
+    }
+
+    // Don't allow interventions of other events. E.g. in the case of A->B->D->C, it stops finding A->B->C at the D
+    // and the max event level is 2.
+    return _modes.hasStrictOrder() && currentEventStep != maxStep;
+  }
+
+  private boolean shouldSkipEvent(long currentTimestamp, long previousTimestamp) {
+    return _modes.hasStrictIncrease() && previousTimestamp == currentTimestamp;
+  }
+
+  private int updateMaxStep(int maxStep, int currentEventStep) {
+    if (maxStep == currentEventStep) {
+      return maxStep + 1;
+    }
+    return maxStep;
+  }
+//Refactoring end
 
   @Override
   public Long mergeFinalResult(Long finalResult1, Long finalResult2) {

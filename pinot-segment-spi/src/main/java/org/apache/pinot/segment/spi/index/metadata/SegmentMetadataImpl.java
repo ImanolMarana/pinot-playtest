@@ -202,23 +202,23 @@ public class SegmentMetadataImpl implements SegmentMetadata {
 
   private void init(PropertiesConfiguration segmentMetadataPropertiesConfiguration)
       throws ConfigurationException {
+    initSegmentMetadata(segmentMetadataPropertiesConfiguration);
+    initColumnMetadataAndSchema(segmentMetadataPropertiesConfiguration);
+    loadIndexMetadata();
+    buildStarTreeV2Metadata(segmentMetadataPropertiesConfiguration);
+    setOffsets(segmentMetadataPropertiesConfiguration);
+    setCustomConfigs(segmentMetadataPropertiesConfiguration, _customMap);
+  }
+
+  private void initSegmentMetadata(PropertiesConfiguration segmentMetadataPropertiesConfiguration) {
     if (segmentMetadataPropertiesConfiguration.containsKey(Segment.SEGMENT_CREATOR_VERSION)) {
       _creatorName = segmentMetadataPropertiesConfiguration.getString(Segment.SEGMENT_CREATOR_VERSION);
     }
 
     String versionString =
-        segmentMetadataPropertiesConfiguration.getString(Segment.SEGMENT_VERSION, SegmentVersion.v1.toString());
+        segmentMetadataPropertiesConfiguration.getString(Segment.SEGMENT_VERSION,
+            SegmentVersion.v1.toString());
     _segmentVersion = SegmentVersion.valueOf(versionString);
-
-    // NOTE: here we only add physical columns as virtual columns should not be loaded from metadata file
-    // NOTE: getList() will always return an non-null List with trimmed strings:
-    // - If key does not exist, it will return an empty list
-    // - If key exists but value is missing, it will return a singleton list with an empty string
-    Set<String> physicalColumns = new HashSet<>();
-    addPhysicalColumns(segmentMetadataPropertiesConfiguration.getList(Segment.DIMENSIONS), physicalColumns);
-    addPhysicalColumns(segmentMetadataPropertiesConfiguration.getList(Segment.METRICS), physicalColumns);
-    addPhysicalColumns(segmentMetadataPropertiesConfiguration.getList(Segment.TIME_COLUMN_NAME), physicalColumns);
-    addPhysicalColumns(segmentMetadataPropertiesConfiguration.getList(Segment.DATETIME_COLUMNS), physicalColumns);
 
     // Set the table name (for backward compatibility)
     String tableName = segmentMetadataPropertiesConfiguration.getString(Segment.TABLE_NAME);
@@ -228,6 +228,19 @@ public class SegmentMetadataImpl implements SegmentMetadata {
 
     // Set segment name.
     _segmentName = segmentMetadataPropertiesConfiguration.getString(Segment.SEGMENT_NAME);
+  }
+
+  private void initColumnMetadataAndSchema(PropertiesConfiguration segmentMetadataPropertiesConfiguration) {
+    // NOTE: here we only add physical columns as virtual columns should not be loaded from metadata file
+    // NOTE: getList() will always return an non-null List with trimmed strings:
+    // - If key does not exist, it will return an empty list
+    // - If key exists but value is missing, it will return a singleton list with an empty string
+    Set<String> physicalColumns = new HashSet<>();
+    addPhysicalColumns(segmentMetadataPropertiesConfiguration.getList(Segment.DIMENSIONS), physicalColumns);
+    addPhysicalColumns(segmentMetadataPropertiesConfiguration.getList(Segment.METRICS), physicalColumns);
+    addPhysicalColumns(segmentMetadataPropertiesConfiguration.getList(Segment.TIME_COLUMN_NAME), physicalColumns);
+    addPhysicalColumns(segmentMetadataPropertiesConfiguration.getList(Segment.DATETIME_COLUMNS),
+        physicalColumns);
 
     // Build column metadata map and schema.
     for (String column : physicalColumns) {
@@ -236,7 +249,9 @@ public class SegmentMetadataImpl implements SegmentMetadata {
       _columnMetadataMap.put(column, columnMetadata);
       _schema.addField(columnMetadata.getFieldSpec());
     }
+  }
 
+  private void loadIndexMetadata() throws ConfigurationException {
     // Load index metadata
     // Support V3 (e.g. SingleFileIndexDirectory only)
     if (_segmentVersion == SegmentVersion.v3) {
@@ -256,7 +271,9 @@ public class SegmentMetadataImpl implements SegmentMetadata {
         }
       }
     }
+  }
 
+  private void buildStarTreeV2Metadata(PropertiesConfiguration segmentMetadataPropertiesConfiguration) {
     // Build star-tree v2 metadata
     int starTreeV2Count =
         segmentMetadataPropertiesConfiguration.getInt(StarTreeV2Constants.MetadataKey.STAR_TREE_COUNT, 0);
@@ -267,14 +284,15 @@ public class SegmentMetadataImpl implements SegmentMetadata {
             segmentMetadataPropertiesConfiguration.subset(StarTreeV2Constants.MetadataKey.getStarTreePrefix(i))));
       }
     }
+  }
 
+  private void setOffsets(PropertiesConfiguration segmentMetadataPropertiesConfiguration) {
     // Set start/end offset if available
     _startOffset = segmentMetadataPropertiesConfiguration.getString(Segment.Realtime.START_OFFSET, null);
     _endOffset = segmentMetadataPropertiesConfiguration.getString(Segment.Realtime.END_OFFSET, null);
-
-    // Set custom configs from metadata properties
-    setCustomConfigs(segmentMetadataPropertiesConfiguration, _customMap);
   }
+
+//Refactoring end
 
   private static void setCustomConfigs(Configuration segmentMetadataPropertiesConfiguration,
       Map<String, String> customConfigsMap) {

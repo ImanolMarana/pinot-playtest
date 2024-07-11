@@ -60,54 +60,53 @@ public class StreamingInstanceResponseOperator extends InstanceResponseOperator 
 
   @Override
   protected InstanceResponseBlock getNextBlock() {
-    try {
-      prefetchAll();
-      if (_streamingCombineOperator != null) {
-        _streamingCombineOperator.start();
-        BaseResultsBlock resultsBlock = getBaseBlock();
-        while (!(resultsBlock instanceof MetadataResultsBlock)) {
-          if (resultsBlock instanceof ExceptionResultsBlock) {
-            return new InstanceResponseBlock(resultsBlock);
-          }
-          if (resultsBlock.getNumRows() > 0) {
-            _streamer.send(resultsBlock);
-          }
-          resultsBlock = getBaseBlock();
-        }
-        // Return a metadata-only block in the end
-        return buildInstanceResponseBlock(resultsBlock);
-      } else {
-        // Handle single block combine operator in streaming fashion
-        BaseResultsBlock resultsBlock = getBaseBlock();
-        if (resultsBlock instanceof ExceptionResultsBlock) {
-          return new InstanceResponseBlock(resultsBlock);
-        }
-        if (resultsBlock.getNumRows() > 0) {
-          _streamer.send(resultsBlock);
-        }
-        return buildInstanceResponseBlock(resultsBlock).toMetadataOnlyResponseBlock();
-      }
-    } catch (EarlyTerminationException e) {
-      Exception killedErrorMsg = Tracing.getThreadAccountant().getErrorStatus();
-      return new InstanceResponseBlock(new ExceptionResultsBlock(new QueryCancelledException(
-          "Cancelled while streaming results" + (killedErrorMsg == null ? StringUtils.EMPTY : " " + killedErrorMsg),
-          e)));
-    } catch (Exception e) {
-      return new InstanceResponseBlock(new ExceptionResultsBlock(QueryException.INTERNAL_ERROR, e));
-    } finally {
-      if (_streamingCombineOperator != null) {
-        _streamingCombineOperator.stop();
-      }
-      releaseAll();
+  try {
+    prefetchAll();
+    if (_streamingCombineOperator != null) {
+      return getNextBlockFromStreamingCombineOperator();
+    } else {
+      return getNextBlockFromCombineOperator();
     }
-  }
-
-  protected BaseResultsBlock getCombinedResults() {
-    return _combineOperator.nextBlock();
-  }
-
-  @Override
-  public String toExplainString() {
-    return EXPLAIN_NAME;
+  } catch (EarlyTerminationException e) {
+    Exception killedErrorMsg = Tracing.getThreadAccountant().getErrorStatus();
+    return new InstanceResponseBlock(new ExceptionResultsBlock(new QueryCancelledException(
+        "Cancelled while streaming results" + (killedErrorMsg == null ? StringUtils.EMPTY : " " + killedErrorMsg),
+        e)));
+  } catch (Exception e) {
+    return new InstanceResponseBlock(new ExceptionResultsBlock(QueryException.INTERNAL_ERROR, e));
+  } finally {
+    if (_streamingCombineOperator != null) {
+      _streamingCombineOperator.stop();
+    }
+    releaseAll();
   }
 }
+
+private InstanceResponseBlock getNextBlockFromStreamingCombineOperator() {
+  _streamingCombineOperator.start();
+  BaseResultsBlock resultsBlock = getBaseBlock();
+  while (!(resultsBlock instanceof MetadataResultsBlock)) {
+    if (resultsBlock instanceof ExceptionResultsBlock) {
+      return new InstanceResponseBlock(resultsBlock);
+    }
+    if (resultsBlock.getNumRows() > 0) {
+      _streamer.send(resultsBlock);
+    }
+    resultsBlock = getBaseBlock();
+  }
+  // Return a metadata-only block in the end
+  return buildInstanceResponseBlock(resultsBlock);
+}
+
+private InstanceResponseBlock getNextBlockFromCombineOperator() {
+  BaseResultsBlock resultsBlock = getBaseBlock();
+  if (resultsBlock instanceof ExceptionResultsBlock) {
+    return new InstanceResponseBlock(resultsBlock);
+  }
+  if (resultsBlock.getNumRows() > 0) {
+    _streamer.send(resultsBlock);
+  }
+  return buildInstanceResponseBlock(resultsBlock).toMetadataOnlyResponseBlock();
+}
+
+//Refactoring end

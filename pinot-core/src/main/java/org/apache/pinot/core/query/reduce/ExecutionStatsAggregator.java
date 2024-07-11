@@ -71,36 +71,138 @@ public class ExecutionStatsAggregator {
   }
 
   public void aggregate(ServerRoutingInstance routingInstance, DataTable dataTable) {
-    TableType tableType = routingInstance.getTableType();
-    String instanceName = routingInstance.getShortName();
-    Map<String, String> metadata = dataTable.getMetadata();
-
-    // Reduce on trace info.
-    if (_enableTrace && metadata.containsKey(DataTable.MetadataKey.TRACE_INFO.getName())) {
-      _traceInfo.put(instanceName, metadata.get(DataTable.MetadataKey.TRACE_INFO.getName()));
-    }
-
-    // Reduce on exceptions.
-    Map<Integer, String> exceptions = dataTable.getExceptions();
-    for (Map.Entry<Integer, String> entry : exceptions.entrySet()) {
-      _processingExceptions.add(new QueryProcessingException(entry.getKey(), entry.getValue()));
-    }
-
-    // Reduce on execution statistics.
-    String numDocsScannedString = metadata.get(DataTable.MetadataKey.NUM_DOCS_SCANNED.getName());
-    if (numDocsScannedString != null) {
-      _numDocsScanned += Long.parseLong(numDocsScannedString);
-    }
-    String numEntriesScannedInFilterString =
-        metadata.get(DataTable.MetadataKey.NUM_ENTRIES_SCANNED_IN_FILTER.getName());
-    if (numEntriesScannedInFilterString != null) {
-      _numEntriesScannedInFilter += Long.parseLong(numEntriesScannedInFilterString);
-    }
-    String numEntriesScannedPostFilterString =
-        metadata.get(DataTable.MetadataKey.NUM_ENTRIES_SCANNED_POST_FILTER.getName());
-    if (numEntriesScannedPostFilterString != null) {
-      _numEntriesScannedPostFilter += Long.parseLong(numEntriesScannedPostFilterString);
-    }
+        TableType tableType = routingInstance.getTableType();
+        String instanceName = routingInstance.getShortName();
+        Map<String, String> metadata = dataTable.getMetadata();
+    
+        aggregateTraceInfo(instanceName, metadata);
+        aggregateExceptions(dataTable);
+        aggregateExecutionStatistics(tableType, metadata);
+      }
+    
+      private void aggregateTraceInfo(String instanceName, Map<String, String> metadata) {
+        if (_enableTrace && metadata.containsKey(DataTable.MetadataKey.TRACE_INFO.getName())) {
+          _traceInfo.put(instanceName, metadata.get(DataTable.MetadataKey.TRACE_INFO.getName()));
+        }
+      }
+    
+      private void aggregateExceptions(DataTable dataTable) {
+        Map<Integer, String> exceptions = dataTable.getExceptions();
+        for (Map.Entry<Integer, String> entry : exceptions.entrySet()) {
+          _processingExceptions.add(new QueryProcessingException(entry.getKey(), entry.getValue()));
+        }
+      }
+    
+      private void aggregateExecutionStatistics(TableType tableType, Map<String, String> metadata) {
+        aggregateNumericMetadata(metadata);
+        aggregateCpuTimeMetadata(tableType, metadata);
+        aggregatePruningMetadata(metadata);
+        aggregateExplainPlanMetadata(metadata);
+    
+        String numTotalDocsString = metadata.get(DataTable.MetadataKey.TOTAL_DOCS.getName());
+        if (numTotalDocsString != null) {
+          _numTotalDocs += Long.parseLong(numTotalDocsString);
+        }
+    
+        _numGroupsLimitReached |=
+                Boolean.parseBoolean(metadata.get(DataTable.MetadataKey.NUM_GROUPS_LIMIT_REACHED.getName()));
+      }
+    
+      private void aggregateNumericMetadata(Map<String, String> metadata) {
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_DOCS_SCANNED,
+                l -> _numDocsScanned += l);
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_ENTRIES_SCANNED_IN_FILTER,
+                l -> _numEntriesScannedInFilter += l);
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_ENTRIES_SCANNED_POST_FILTER,
+                l -> _numEntriesScannedPostFilter += l);
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_SEGMENTS_QUERIED,
+                l -> _numSegmentsQueried += l);
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_SEGMENTS_PROCESSED,
+                l -> _numSegmentsProcessed += l);
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_SEGMENTS_MATCHED,
+                l -> _numSegmentsMatched += l);
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_CONSUMING_SEGMENTS_QUERIED,
+                l -> _numConsumingSegmentsQueried += l);
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_CONSUMING_SEGMENTS_PROCESSED,
+                l -> _numConsumingSegmentsProcessed += l);
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_CONSUMING_SEGMENTS_MATCHED,
+                l -> _numConsumingSegmentsMatched += l);
+    
+        String minConsumingFreshnessTimeMsString =
+                metadata.get(DataTable.MetadataKey.MIN_CONSUMING_FRESHNESS_TIME_MS.getName());
+        if (minConsumingFreshnessTimeMsString != null) {
+          _minConsumingFreshnessTimeMs =
+                  Math.min(Long.parseLong(minConsumingFreshnessTimeMsString), _minConsumingFreshnessTimeMs);
+        }
+      }
+    
+      private void aggregateCpuTimeMetadata(TableType tableType, Map<String, String> metadata) {
+        String threadCpuTimeNsString = metadata.get(DataTable.MetadataKey.THREAD_CPU_TIME_NS.getName());
+        if (tableType != null && threadCpuTimeNsString != null) {
+          if (tableType == TableType.OFFLINE) {
+            _offlineThreadCpuTimeNs += Long.parseLong(threadCpuTimeNsString);
+          } else {
+            _realtimeThreadCpuTimeNs += Long.parseLong(threadCpuTimeNsString);
+          }
+        }
+    
+        String systemActivitiesCpuTimeNsString =
+                metadata.get(DataTable.MetadataKey.SYSTEM_ACTIVITIES_CPU_TIME_NS.getName());
+        if (tableType != null && systemActivitiesCpuTimeNsString != null) {
+          if (tableType == TableType.OFFLINE) {
+            _offlineSystemActivitiesCpuTimeNs += Long.parseLong(systemActivitiesCpuTimeNsString);
+          } else {
+            _realtimeSystemActivitiesCpuTimeNs += Long.parseLong(systemActivitiesCpuTimeNsString);
+          }
+        }
+    
+        String responseSerializationCpuTimeNsString =
+                metadata.get(DataTable.MetadataKey.RESPONSE_SER_CPU_TIME_NS.getName());
+        if (tableType != null && responseSerializationCpuTimeNsString != null) {
+          if (tableType == TableType.OFFLINE) {
+            _offlineResponseSerializationCpuTimeNs += Long.parseLong(responseSerializationCpuTimeNsString);
+          } else {
+            _realtimeResponseSerializationCpuTimeNs += Long.parseLong(responseSerializationCpuTimeNsString);
+          }
+        }
+        _offlineTotalCpuTimeNs =
+                _offlineThreadCpuTimeNs + _offlineSystemActivitiesCpuTimeNs + _offlineResponseSerializationCpuTimeNs;
+        _realtimeTotalCpuTimeNs =
+                _realtimeThreadCpuTimeNs + _realtimeSystemActivitiesCpuTimeNs + _realtimeResponseSerializationCpuTimeNs;
+      }
+    
+      private void aggregatePruningMetadata(Map<String, String> metadata) {
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_SEGMENTS_PRUNED_BY_SERVER,
+                l -> _numSegmentsPrunedByServer += l);
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_SEGMENTS_PRUNED_INVALID,
+                l -> _numSegmentsPrunedInvalid += l);
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_SEGMENTS_PRUNED_BY_LIMIT,
+                l -> _numSegmentsPrunedByLimit += l);
+        withNotNullLongMetadata(metadata, DataTable.MetadataKey.NUM_SEGMENTS_PRUNED_BY_VALUE,
+                l -> _numSegmentsPrunedByValue += l);
+      }
+    
+      private void aggregateExplainPlanMetadata(Map<String, String> metadata) {
+        String explainPlanNumEmptyFilterSegments =
+                metadata.get(DataTable.MetadataKey.EXPLAIN_PLAN_NUM_EMPTY_FILTER_SEGMENTS.getName());
+        if (explainPlanNumEmptyFilterSegments != null) {
+          _explainPlanNumEmptyFilterSegments += Long.parseLong(explainPlanNumEmptyFilterSegments);
+        }
+    
+        String explainPlanNumMatchAllFilterSegments =
+                metadata.get(DataTable.MetadataKey.EXPLAIN_PLAN_NUM_MATCH_ALL_FILTER_SEGMENTS.getName());
+        if (explainPlanNumMatchAllFilterSegments != null) {
+          _explainPlanNumMatchAllFilterSegments += Long.parseLong(explainPlanNumMatchAllFilterSegments);
+        }
+      }
+    
+      private void withNotNullLongMetadata(Map<String, String> metadata, DataTable.MetadataKey key, LongConsumer consumer) {
+        String strValue = metadata.get(key.getName());
+        if (strValue != null) {
+          consumer.accept(Long.parseLong(strValue));
+        }
+      }
+//Refactoring end
     String numSegmentsQueriedString = metadata.get(DataTable.MetadataKey.NUM_SEGMENTS_QUERIED.getName());
     if (numSegmentsQueriedString != null) {
       _numSegmentsQueried += Long.parseLong(numSegmentsQueriedString);

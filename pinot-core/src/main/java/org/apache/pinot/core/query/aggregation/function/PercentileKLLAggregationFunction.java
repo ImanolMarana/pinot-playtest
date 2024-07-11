@@ -155,28 +155,40 @@ public class PercentileKLLAggregationFunction
     DataType valueType = valueSet.getValueType();
 
     if (valueType == DataType.BYTES) {
-      // serialized sketch
-      KllDoublesSketch[] deserializedSketches = deserializeSketches(blockValSetMap.get(_expression).getBytesValuesSV());
-      forEachNotNull(length, valueSet, (from, to) -> {
-        for (int i = from; i < to; i++) {
-          for (int groupKey : groupKeysArray[i]) {
-            KllDoublesSketch sketch = getOrCreateSketch(groupByResultHolder, groupKey);
-            sketch.merge(deserializedSketches[i]);
-          }
-        }
-      });
+      aggregateGroupByMVForBytes(length, groupKeysArray, groupByResultHolder, blockValSetMap);
     } else {
-      double[] values = valueSet.getDoubleValuesSV();
-      forEachNotNull(length, valueSet, (from, to) -> {
-        for (int i = from; i < to; i++) {
-          for (int groupKey : groupKeysArray[i]) {
-            KllDoublesSketch sketch = getOrCreateSketch(groupByResultHolder, groupKey);
-            sketch.update(values[i]);
-          }
-        }
-      });
+      aggregateGroupByMVForOthers(length, groupKeysArray, groupByResultHolder, blockValSetMap);
     }
   }
+
+  private void aggregateGroupByMVForBytes(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, Map<ExpressionContext, BlockValSet> blockValSetMap) {
+    KllDoublesSketch[] deserializedSketches = deserializeSketches(
+        blockValSetMap.get(_expression).getBytesValuesSV());
+    forEachNotNull(length, blockValSetMap.get(_expression), (from, to) -> {
+      for (int i = from; i < to; i++) {
+        for (int groupKey : groupKeysArray[i]) {
+          KllDoublesSketch sketch = getOrCreateSketch(groupByResultHolder, groupKey);
+          sketch.merge(deserializedSketches[i]);
+        }
+      }
+    });
+  }
+
+  private void aggregateGroupByMVForOthers(int length, int[][] groupKeysArray,
+      GroupByResultHolder groupByResultHolder, Map<ExpressionContext, BlockValSet> blockValSetMap) {
+    double[] values = blockValSetMap.get(_expression).getDoubleValuesSV();
+    forEachNotNull(length, blockValSetMap.get(_expression), (from, to) -> {
+      for (int i = from; i < to; i++) {
+        for (int groupKey : groupKeysArray[i]) {
+          KllDoublesSketch sketch = getOrCreateSketch(groupByResultHolder, groupKey);
+          sketch.update(values[i]);
+        }
+      }
+    });
+  }
+
+//Refactoring end
 
   /**
    * Extracts the sketch from the result holder or creates a new one if it does not exist.
