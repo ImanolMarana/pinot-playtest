@@ -554,7 +554,6 @@ public class JsonUtils {
   }
 
 //Refactoring end
-  }
 
   public static Schema getPinotSchemaFromJsonFile(File jsonFile,
       @Nullable Map<String, FieldSpec.FieldType> fieldTypeMap, @Nullable TimeUnit timeUnit,
