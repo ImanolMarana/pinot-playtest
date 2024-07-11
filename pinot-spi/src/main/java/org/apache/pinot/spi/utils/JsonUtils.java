@@ -555,6 +555,63 @@ public class JsonUtils {
 
 //Refactoring end
 
+  private static IncludeResult shouldInclude(JsonIndexConfig jsonIndexConfig, String path) {
+    Set<String> includePaths = jsonIndexConfig.getIncludePaths();
+    if (includePaths != null) {
+      if (includePaths.contains(path)) {
+        return IncludeResult.MATCH;
+      }
+      for (String includePath : includePaths) {
+        if (includePath.startsWith(path)) {
+          return IncludeResult.POTENTIAL_MATCH;
+        }
+      }
+      return IncludeResult.NOT_MATCH;
+    }
+    Set<String> excludePaths = jsonIndexConfig.getExcludePaths();
+    if (excludePaths != null && excludePaths.contains(path)) {
+      return IncludeResult.NOT_MATCH;
+    }
+    return IncludeResult.POTENTIAL_MATCH;
+  }
+
+  private enum IncludeResult {
+    MATCH(true, true), POTENTIAL_MATCH(true, false), NOT_MATCH(false, false);
+
+    final boolean _shouldInclude;
+    final boolean _includePathMatched;
+
+    IncludeResult(boolean shouldInclude, boolean includePathMatched) {
+      _shouldInclude = shouldInclude;
+      _includePathMatched = includePathMatched;
+    }
+  }
+
+  private static void unnestResults(List<Map<String, String>> currentResults,
+      List<List<Map<String, String>>> nestedResultsList, int index, Map<String, String> nonNestedResult,
+      List<Map<String, String>> outputResults) {
+    int nestedResultsListSize = nestedResultsList.size();
+    if (nestedResultsListSize == index) {
+      for (Map<String, String> currentResult : currentResults) {
+        currentResult.putAll(nonNestedResult);
+        outputResults.add(currentResult);
+      }
+    } else {
+      List<Map<String, String>> nestedResults = nestedResultsList.get(index);
+      int numCurrentResults = currentResults.size();
+      int numNestedResults = nestedResults.size();
+      List<Map<String, String>> newCurrentResults = new ArrayList<>(numCurrentResults * numNestedResults);
+      for (Map<String, String> currentResult : currentResults) {
+        for (Map<String, String> nestedResult : nestedResults) {
+          Map<String, String> newCurrentResult = new TreeMap<>(currentResult);
+          newCurrentResult.putAll(nestedResult);
+          newCurrentResults.add(newCurrentResult);
+        }
+      }
+      unnestResults(newCurrentResults, nestedResultsList, index + 1, nonNestedResult, outputResults);
+    }
+  }
+
   public static Schema getPinotSchemaFromJsonFile(File jsonFile,
       @Nullable Map<String, FieldSpec.FieldType> fieldTypeMap, @Nullable TimeUnit timeUnit,
       @Nullable List<String> fieldsToUnnest, String delimiter,
